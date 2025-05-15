@@ -1,0 +1,25 @@
+version: '3.8'
+
+services:
+  ros1-sensor-sonar-aris:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        - workspace=${workspace}
+        - rosversion=${rosversion}
+    image: sonar-ros:dev
+
+    container_name: ${container_name}
+    hostname: ${hostname}
+    network_mode: host
+    environment:
+      - DISPLAY=${DISPLAY}
+      - QT_X11_NO_MITSHM=1
+    volumes:
+    # In newest versions of linux distributions, the display server uses Wayland instead of X11
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw
+      - ./files/src:/home/${workspace}/src
+    stdin_open: true
+    tty: true
+    command: bash
