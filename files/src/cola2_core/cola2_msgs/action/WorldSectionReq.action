@@ -1,0 +1,60 @@
+# Define the REQUEST
+
+# Initial state
+geometry_msgs/Point initial_position
+float64 initial_yaw
+float64 initial_surge
+bool use_initial_yaw
+
+# Final state
+geometry_msgs/Point final_position
+float64 final_yaw
+float64 final_surge
+bool use_final_yaw
+
+# Flag to consider z as altitude
+bool altitude_mode
+
+# Flag to not control z axis (LOS only)
+bool disable_z
+
+# Final waypoint tolerance (LOS only)
+geometry_msgs/Point tolerance
+
+# Controller type
+uint64 controller_type
+uint64 DUBINS=0
+uint64 LOSCTE=1
+
+
+# Priority
+uint64 priority
+
+# Timeout
+float64 timeout
+
+---
+
+# Define the RESULT
+# Possible section ending conditions
+uint64 final_status
+uint64 SUCCESS=0
+uint64 TIMEOUT=1
+uint64 FAILURE=2
+uint64 BUSY=3
+
+
+---
+
+
+# Define a FEEDBACK
+# Current output of the controller
+float64 desired_surge
+float64 desired_depth
+float64 desired_yaw
+
+# Errors
+float64 cross_track_error
+float64 depth_error
+float64 yaw_error
+float64 distance_to_section_end
