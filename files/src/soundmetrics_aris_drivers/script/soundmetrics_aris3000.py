@@ -207,7 +207,7 @@ class SoundMetricsAris3000(object) :
             # Send ping
             cmd = self.create_command(PING, [0, 0, 0, 0, 0, 0])
             self.send_command(cmd)
-            rospy.sleep(3.0)aaaa
+            rospy.sleep(3.0)
 
 
     def set_configuration(self, req):
