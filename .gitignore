@@ -3,3 +3,11 @@
 *.py[cod]
 *$py.class
 
+# Vscode
+.vscode/
+
+# Old folders
+files/src/cola2_core/
+files/src/auv_msgs/
+files/src/soundmetrics_aris_3000_driver/
+
