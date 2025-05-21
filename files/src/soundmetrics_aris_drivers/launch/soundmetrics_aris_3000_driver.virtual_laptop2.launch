@@ -1,0 +1,8 @@
+<?xml version="1.0"?>
+<launch>
+	<node pkg="soundmetrics_aris_3000_driver" type="soundmetrics_aris3000.py" name="soundmetrics_aris3000" output="screen" respawn="true">
+		<rosparam command="load" file="$(find soundmetrics_aris_3000_driver)/config/soundmetrics_aris3000.virtual_laptop2.yaml"/>
+	</node>
+  		
+</launch>
+
