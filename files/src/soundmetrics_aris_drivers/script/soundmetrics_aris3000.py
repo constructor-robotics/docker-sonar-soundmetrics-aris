@@ -624,45 +624,26 @@ class SoundMetricsAris3000(object) :
 
         return sonar_info
 
-    def getRosParams(self, obj, params, node_name=None):
-        valid_config = True
-        for key in params:
-            if rospy.has_param(params[key]):
-                param_value = rospy.get_param(params[key])
-                setattr(obj, key, param_value)
-            else:
-                valid_config = False
-                if node_name == None:
-                    rospy.logfatal(params[key] + " parameter not found")
-                else:
-                    rospy.logfatal(node_name + ": " + params[key] + " parameter not found")
-        return valid_config
-
     def get_config(self):
         """ Read configurations from ROS PARAM SERVER """
-
-        param_dict = {
-	    'debug':'/soundmetrics_aris3000/debug',
-        'use_64_bit_os':'/soundmetrics_aris3000/use_64_bit_os',
-	    'local_network_interface_name':'/soundmetrics_aris3000/local_network_interface_name',
-	    'publisher_topic':'/soundmetrics_aris3000/publisher_topic',
-        'frame_period_sec':'/soundmetrics_aris3000/frame_period_sec',
-        'gain': '/soundmetrics_aris3000/gain',
-        'frequency': '/soundmetrics_aris3000/frequency',
-        'focus': '/soundmetrics_aris3000/focus',
-        'pulse_width': '/soundmetrics_aris3000/pulse_width',
-        'ping_mode': '/soundmetrics_aris3000/ping_mode',
-        'samples_per_beam': '/soundmetrics_aris3000/samples_per_beam',
-        'window_start': '/soundmetrics_aris3000/window_start',
-        'window_length': '/soundmetrics_aris3000/window_length',
-        'ixsize': '/soundmetrics_aris3000/cartesian_width',
-        'tf_array': '/soundmetrics_aris3000/tf',
-        'sound_velocity': '/sound_velocity',
-        'local_ip': '/soundmetrics_aris3000/local_ip',
-        'sender_ip': '/soundmetrics_aris3000/sender_ip'
-        }
-
-        self.getRosParams(self, param_dict)
+        self.debug = rospy.get_param('~debug', True)
+        self.use_64_bit_os = rospy.get_param('~use_64_bit_os', True)
+        self.local_network_interface_name = rospy.get_param('~local_network_interface_name', "")
+        self.publisher_topic = rospy.get_param('~publisher_topic', "/cola2_perception/soundmetrics_aris3000/")
+        self.frame_period_sec = rospy.get_param('~frame_period_sec', 1.0)
+        self.gain = rospy.get_param('~gain', 24)
+        self.frequency = rospy.get_param('~frequency', 1)
+        self.focus = rospy.get_param('~focus', 364)
+        self.pulse_width = rospy.get_param('~pulse_width', 8)
+        self.ping_mode = rospy.get_param('~ping_mode', 9)
+        self.samples_per_beam = rospy.get_param('~samples_per_beam', 512)
+        self.window_start = rospy.get_param('~window_start', 0.7)
+        self.window_length = rospy.get_param('~window_length', 3.5)
+        self.ixsize = rospy.get_param('~cartesian_width', 350)
+        self.tf_array = rospy.get_param('~tf', [0.0, 0.0, 0.0, 1.57, 0.0, 1.57])
+        self.sound_velocity = rospy.get_param('~sound_velocity', 1500.0)
+        self.local_ip = rospy.get_param('~local_ip', "169.254.7.10")
+        self.sender_ip = rospy.get_param('~sender_ip', "169.254.7.147")
 
         [self.mode, self.beams, self.pings, success] = __get_beams_and_pings__(self.ping_mode)
 
