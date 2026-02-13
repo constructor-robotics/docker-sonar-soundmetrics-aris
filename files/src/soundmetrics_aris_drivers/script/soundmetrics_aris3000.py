@@ -41,6 +41,7 @@ import threading
 import numpy as np
 import math
 import subprocess
+import sys
 
 # COMMANDS DEFINITION
 PING = 1
@@ -81,12 +82,12 @@ class SoundMetricsAris3000(object) :
     def __init__(self, name):
         """ Soundmetrics ARIS 3000 driver """
         self.name = name
-        self.local_network_interface_name = "enp4s0"
+        self.local_network_interface_name = ""
 
         #debug images 
         self.debug = True
         self.use_64_bit_os = True 
-        self.publisher_topic = "/cola2_perception/soundmetrics_aris3000/"
+        self.publisher_topic = "/soundmetrics_aris3000/"
 
         self.nt = 0
         self.need_sync = True
@@ -108,6 +109,8 @@ class SoundMetricsAris3000(object) :
         self.sound_velocity = 1500.0
         self.tf_array = [0.0, 0.0, 0.0, 1.57, 0.0, 1.57]
         self.offset_fls_to_dvl = 0.25
+        self.local_ip = "169.254.7.10"
+        self.sender_ip = "169.254.7.147"
 
         # Param to be init later
         self.beams = 0
@@ -118,71 +121,71 @@ class SoundMetricsAris3000(object) :
         #self.odometry = Odometry()
         self.compass_pitch = 0.0
 
+        self.altitude = 1.0
+
         # Load ROS PARAM SERVER parameters
         self.get_config()
 
 
-        self.altitude = 1.0
-
-        # Get local IP
-
+        ### Check whether network interface is available
         if self.getNetworkInterface(self.local_network_interface_name) == -1:
-            print("Required local network interface ", self.local_network_interface_name, "not found!")
-            exit()
+            rospy.logfatal('Required local network interface %s not found!', self.local_network_interface_name)
+            sys.exit(1)
 
-        self.local_IP = subprocess.getoutput("/sbin/ifconfig").split("\n")[self.getNetworkInterface(self.local_network_interface_name)+1].split()[1][5:]
-    
-        # ip = self.local_IP.split('.')
-        # print(ip)
-        # self.local_IP_dec = ((2**24)*int(ip[0]) + (2**16)*int(ip[1]) + (2**8)*int(ip[2]) + int(ip[3]))
+        ### NOTE: This line in case IP is extracted automatically - to be tested
+        # self.local_IP = subprocess.getoutput("/sbin/ifconfig").split("\n")[self.getNetworkInterface(self.local_network_interface_name)+1].split()[1][5:]
 
-        self.local_IP = '169.254.10.3'
+
+        # Use IPs from config
+        self.local_IP = self.local_ip
         ip = self.local_IP.split('.')
-        self.local_IP_dec = ((2**24)*int(ip[0]) + (2**16)*int(ip[1]) + (2**8)*int(ip[2]) + int(ip[3]))
-        print(ip)
-        rospy.loginfo('%s: Local ip: %s of network interface:  %s', self.name, self.local_IP,self.local_network_interface_name)
+        self.local_IP_dec = (int(ip[0]) << 24) + (int(ip[1]) << 16) + (int(ip[2]) << 8) + int(ip[3])
+        rospy.loginfo('%s: Local ip: %s', self.name, self.local_IP)
 
-        # Connect to UDP socket at port 56123
-        udp = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        udp.bind(('', 56123))
+        ### NOTE: The following block extracts the sensor IP by parsing a UDP package
+        ### Needs to be tested for reliabilty, it sometimes gives 0 at boot
 
-        header = udp.recv(68)
-        rospy.loginfo('%s: Read header from UDP:56123', self.name)
-        udp.close()
+        # # Connect to UDP socket at port 56123
+        # udp = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        # udp.bind(('', 56123))
 
-        header_fmt = list(struct.unpack('< 17I', header))
-        rospy.loginfo('%s: Received header at UDP:56123\n %s',
-                    self.name, header_fmt)
+        # header = udp.recv(68)
+        # rospy.loginfo('%s: Read header from UDP:56123', self.name)
+        # udp.close()
 
-        # Save sender IP
-        self.sender_IP = header_fmt[6]
-        byte_1 = self.sender_IP >> 24
-        byte_2 = (self.sender_IP - byte_1*(2**24)) >> 16
-        byte_3 = (self.sender_IP - byte_1*(2**24) - byte_2*(2**16)) >> 8
-        byte_4 = (self.sender_IP - byte_1*(2**24) - byte_2*(2**16) - byte_3*(2**8))
-        self.sender_IP_text = (str(byte_1) + '.' + str(byte_2) + '.' +
-                            str(byte_3) + '.' + str(byte_4))
-        rospy.loginfo('%s: sender ip: %s', self.name, self.sender_IP_text)
+        # header_fmt = list(struct.unpack('< 17I', header))
+        # rospy.loginfo('%s: Received header at UDP:56123\n %s',
+        #             self.name, header_fmt)
+
+        # # Save sender IP
+        # self.sender_IP = header_fmt[6]
+        # byte_1 = self.sender_IP >> 24
+        # byte_2 = (self.sender_IP - byte_1*(2**24)) >> 16
+        # byte_3 = (self.sender_IP - byte_1*(2**24) - byte_2*(2**16)) >> 8
+        # byte_4 = (self.sender_IP - byte_1*(2**24) - byte_2*(2**16) - byte_3*(2**8))
+        # self.sender_IP_text = (str(byte_1) + '.' + str(byte_2) + '.' +
+        #                     str(byte_3) + '.' + str(byte_4))
+
+        ### ------------------------------------------------------------------------------
+
+        self.sender_IP_text = self.sender_ip
+        parts = self.sender_IP_text.split('.')
+        self.sender_IP = (int(parts[0]) << 24) + (int(parts[1]) << 16) + (int(parts[2]) << 8) + int(parts[3])
+        rospy.loginfo('%s: Sender ip: %s', self.name, self.sender_IP_text)
 
         # Create TCP socket at localhost:56888
-        self.tcp = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        self.tcp.connect((self.sender_IP_text, 56888))
-        self.tcp.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
-
-        # Create publisher
-        self.polar_pub = rospy.Publisher(self.publisher_topic + 'polar', Image, queue_size = 2)
-        self.cart_pub = rospy.Publisher(self.publisher_topic + 'cartesian', Image, queue_size = 2)
-        self.sonar_info_pub = rospy.Publisher(self.publisher_topic + 'sonar_info', SonarInfo, queue_size = 2)
-
-        # Create Service
-        self.load_configuration_srv = rospy.Service( self.publisher_topic + 'configuration', SetSonarParams, self.set_configuration)
-
-        self.bridge = CvBridge()
+        try:
+            self.tcp = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            self.tcp.connect((self.sender_IP_text, 56888))
+            self.tcp.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+        except socket.error as e:
+            rospy.logfatal('%s: Failed to create TCP connection to %s:56888 - %s', self.name, self.sender_IP_text, e)
+            raise
 
         # Send inital configuration
         self.send_config()
 
-        # Initialize PING command
+        # Initialize PING command -- Keep alive mechanism to let the sensor know the clients is still connected
         tp = threading.Thread(target = self.send_ping, args=[])
         tp.daemon = True
         tp.start()
@@ -192,8 +195,19 @@ class SoundMetricsAris3000(object) :
         self.udp_data.bind(('', 56444))
         rospy.loginfo('%s: UDP DATA @ 56444 connected!', self.name)
 
+        ### Create ROS Publishers and Services
+        # Create publisher
+        self.polar_pub = rospy.Publisher(self.publisher_topic + 'polar', Image, queue_size = 2)
+        self.cart_pub = rospy.Publisher(self.publisher_topic + 'cartesian', Image, queue_size = 2)
+        self.sonar_info_pub = rospy.Publisher(self.publisher_topic + 'sonar_info', SonarInfo, queue_size = 2)
+        # Create Service
+        self.load_configuration_srv = rospy.Service( self.publisher_topic + 'configuration', SetSonarParams, self.set_configuration)
+        self.bridge = CvBridge()
+        rospy.loginfo('%s: Finish creating ROS Publishers and Services', self.name)
+
+    
     def getNetworkInterface(self, local_network_interface_name):
-	
+        """ Get the network interface index for the given interface name """
         splits = subprocess.getoutput("/sbin/ifconfig").split("\n")
         found_line = -1
         for i_line in range(0, len(splits)):
@@ -202,7 +216,7 @@ class SoundMetricsAris3000(object) :
         return found_line
 
     def send_ping(self):
-        """ Send a ping command to keep ARIS3000 alive """
+        """ Send a ping command to keep sensor connection alive """
         while True:
             # Send ping
             cmd = self.create_command(PING, [0, 0, 0, 0, 0, 0])
@@ -643,7 +657,9 @@ class SoundMetricsAris3000(object) :
         'window_length': '/soundmetrics_aris3000/window_length',
         'ixsize': '/soundmetrics_aris3000/cartesian_width',
         'tf_array': '/soundmetrics_aris3000/tf',
-        'sound_velocity': '/sound_velocity'
+        'sound_velocity': '/sound_velocity',
+        'local_ip': '/soundmetrics_aris3000/local_ip',
+        'sender_ip': '/soundmetrics_aris3000/sender_ip'
         }
 
         self.getRosParams(self, param_dict)
@@ -690,6 +706,7 @@ if __name__ == '__main__':
         rospy.init_node('soundmetrics_aris3000')
         soundmetrics_aris3000 = SoundMetricsAris3000(rospy.get_name())
         while not rospy.is_shutdown():
-            soundmetrics_aris3000.read_ARIS_image()
+            pass
+            # soundmetrics_aris3000.read_ARIS_image()
     except rospy.ROSInterruptException:
         pass
