@@ -205,8 +205,9 @@ class SoundMetricsAris3000(object) :
         self.bridge = CvBridge()
         rospy.loginfo('%s: Finish creating ROS Publishers and Services', self.name)
 
-    
-    def getNetworkInterface(self, local_network_interface_name):
+
+    @staticmethod
+    def getNetworkInterface(local_network_interface_name):
         """ Get the network interface index for the given interface name """
         splits = subprocess.getoutput("/sbin/ifconfig").split("\n")
         found_line = -1
@@ -214,6 +215,61 @@ class SoundMetricsAris3000(object) :
             if local_network_interface_name in splits[i_line]:
                 found_line = i_line
         return found_line
+    
+    @staticmethod
+    def compute_checksum(header_fmt):
+        """ Compute the checksum for an ARIS3000 command header """
+        ret = struct.pack('<17I', *header_fmt)
+        chk_header = struct.unpack('<68B', ret)
+        checksum = 0
+        for i in range(4, len(chk_header)):
+            checksum = checksum + chk_header[i]
+
+        header_fmt[0] = checksum
+
+        cmd = struct.pack('<17I', *header_fmt)
+        return cmd
+
+    @staticmethod
+    def get_beams_and_pings(mode):
+        """ given a mode returns the mode, the number of beams and
+            the number of pings. Default mode 9. """
+        if mode == 1:
+            return [1, 48, 3, True]
+        elif mode == 3:
+            return [3, 96, 6, True]
+        elif mode == 6:
+            return [6, 64, 4, True]
+        elif mode == 9:
+            return [9, 128, 8, True]
+        else:
+            rospy.logfatal('Invalid mode!')
+            return [9, 128, 8, False]
+    
+    def get_config(self):
+        """ Read configurations from ROS PARAM SERVER """
+        
+        self.debug = rospy.get_param('~debug', True)
+        self.use_64_bit_os = rospy.get_param('~use_64_bit_os', True)
+        self.local_network_interface_name = rospy.get_param('~local_network_interface_name', "")
+        self.publisher_topic = rospy.get_param('~publisher_topic', "/cola2_perception/soundmetrics_aris3000/")
+        self.frame_period_sec = rospy.get_param('~frame_period_sec', 1.0)
+        self.gain = rospy.get_param('~gain', 24)
+        self.frequency = rospy.get_param('~frequency', 1)
+        self.focus = rospy.get_param('~focus', 364)
+        self.pulse_width = rospy.get_param('~pulse_width', 8)
+        self.ping_mode = rospy.get_param('~ping_mode', 9)
+        self.samples_per_beam = rospy.get_param('~samples_per_beam', 512)
+        self.window_start = rospy.get_param('~window_start', 0.7)
+        self.window_length = rospy.get_param('~window_length', 3.5)
+        self.ixsize = rospy.get_param('~cartesian_width', 350)
+        self.tf_array = rospy.get_param('~tf', [0.0, 0.0, 0.0, 1.57, 0.0, 1.57])
+        self.sound_velocity = rospy.get_param('~sound_velocity', 1500.0)
+        self.local_ip = rospy.get_param('~local_ip', "169.254.7.10")
+        self.sender_ip = rospy.get_param('~sender_ip', "169.254.7.147")
+
+        [self.mode, self.beams, self.pings, success] = self.get_beams_and_pings(self.ping_mode)
+        self.gain_binary = struct.unpack('I', struct.pack('f', self.gain))[0]
 
     def send_ping(self):
         """ Send a ping command to keep sensor connection alive """
@@ -348,7 +404,7 @@ class SoundMetricsAris3000(object) :
 
     def create_command(self, cmd, params=[0, 0, 0, 0, 0, 0]):
         """ Create an ARIS3000 command header """
-        print()
+
         header_fmt = []
         [header_fmt.append(0) for i in range(17)]
 
@@ -363,15 +419,15 @@ class SoundMetricsAris3000(object) :
         header_fmt[8] = self.sender_IP      # ARIS IP
         header_fmt[9] = 56555               # port
         header_fmt[10] = self.nt            # transaction number
-        #header_fmt[11:] = params            # Params
         header_fmt[11:] = [int(x) for x in params]
 
         for i, val in enumerate(header_fmt):
             if not isinstance(val, int):
                 raise TypeError(f"header_fmt[{i}] = {val} is not an int")
 
-        header = __compute_checksum__(header_fmt)
+        header = self.compute_checksum(header_fmt)
         self.nt = self.nt + 1
+        
         return header
 
 
@@ -611,7 +667,7 @@ class SoundMetricsAris3000(object) :
         sonar_info.samples_per_beam = frame_header_fields[112]
         sonar_info.salinity = frame_header_fields[124]
         
-        [res, sonar_info.beams, res, success] = __get_beams_and_pings__(sonar_info.ping_mode)
+        [res, sonar_info.beams, res, success] = self.get_beams_and_pings(sonar_info.ping_mode)
         if not success:
             self.need_sync = True
 
@@ -624,62 +680,6 @@ class SoundMetricsAris3000(object) :
 
         return sonar_info
 
-    def get_config(self):
-        """ Read configurations from ROS PARAM SERVER """
-        self.debug = rospy.get_param('~debug', True)
-        self.use_64_bit_os = rospy.get_param('~use_64_bit_os', True)
-        self.local_network_interface_name = rospy.get_param('~local_network_interface_name', "")
-        self.publisher_topic = rospy.get_param('~publisher_topic', "/cola2_perception/soundmetrics_aris3000/")
-        self.frame_period_sec = rospy.get_param('~frame_period_sec', 1.0)
-        self.gain = rospy.get_param('~gain', 24)
-        self.frequency = rospy.get_param('~frequency', 1)
-        self.focus = rospy.get_param('~focus', 364)
-        self.pulse_width = rospy.get_param('~pulse_width', 8)
-        self.ping_mode = rospy.get_param('~ping_mode', 9)
-        self.samples_per_beam = rospy.get_param('~samples_per_beam', 512)
-        self.window_start = rospy.get_param('~window_start', 0.7)
-        self.window_length = rospy.get_param('~window_length', 3.5)
-        self.ixsize = rospy.get_param('~cartesian_width', 350)
-        self.tf_array = rospy.get_param('~tf', [0.0, 0.0, 0.0, 1.57, 0.0, 1.57])
-        self.sound_velocity = rospy.get_param('~sound_velocity', 1500.0)
-        self.local_ip = rospy.get_param('~local_ip', "169.254.7.10")
-        self.sender_ip = rospy.get_param('~sender_ip', "169.254.7.147")
-
-        [self.mode, self.beams, self.pings, success] = __get_beams_and_pings__(self.ping_mode)
-
-        self.gain_binary = struct.unpack('I', struct.pack('f', self.gain))[0]
-
-
-def __compute_checksum__(header_fmt):
-    """ Compute the checksum for an ARIS3000 command header """
-
-    ret = struct.pack('<17I', *header_fmt)
-    chk_header = struct.unpack('<68B', ret)
-    checksum = 0
-    for i in range(4, len(chk_header)):
-        checksum = checksum + chk_header[i]
-
-    header_fmt[0] = checksum
-
-    cmd = struct.pack('<17I', *header_fmt)
-    return cmd
-
-
-def __get_beams_and_pings__(mode):
-    """ given a mode returns the mode, the number of beams and
-        the number of pings. Default mode 9. """
-
-    if mode == 1:
-        return [1, 48, 3, True]
-    elif mode == 3:
-        return [3, 96, 6, True]
-    elif mode == 6:
-        return [6, 64, 4, True]
-    elif mode == 9:
-        return [9, 128, 8, True]
-    else:
-        rospy.logfatal('Invalid mode!')
-        return [9, 128, 8, False]
 
 
 if __name__ == '__main__':
