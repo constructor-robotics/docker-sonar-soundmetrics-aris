@@ -24,6 +24,7 @@ SOFTWARE.
 """
 
 import rospy
+import cv2
 import numpy as np
 import math
 import message_filters
@@ -51,6 +52,10 @@ class PolarToCartesianConverter(object):
         self.valid_mask = None
         self.cart_height = 0
         self.cart_width = 0
+        self.pixels_per_meter = 0
+        self.rmin = 0
+        self.rmax = 0
+        self.half_fov_deg = 0
 
         # Subscribers using message_filters for time synchronization
         polar_sub = message_filters.Subscriber(
@@ -145,12 +150,16 @@ class PolarToCartesianConverter(object):
         range_bin = np.clip(range_bin, 0, samples_per_beam - 1)
         beam_index = np.clip(beam_index, 0, beams - 1)
 
-        # Store cached mapping
+        # Store cached mapping and geometry
         self.range_bin_map = range_bin
         self.beam_index_map = beam_index
         self.valid_mask = valid
         self.cart_height = cart_height
         self.cart_width = cart_width
+        self.pixels_per_meter = pixels_per_meter
+        self.rmin = rmin
+        self.rmax = rmax
+        self.half_fov_deg = half_fov_deg
 
         rospy.loginfo('%s: Mapping computed - cartesian image size: %dx%d',
                       self.name, cart_width, cart_height)
@@ -163,6 +172,83 @@ class PolarToCartesianConverter(object):
             self.beam_index_map[self.valid_mask]
         ]
         return cartesian_image
+
+    def draw_grid_overlay(self, image, padding=40):
+        """Draw range rings and angle lines on the cartesian image.
+
+        Converts mono8 to BGR, adds padding, draws the overlay, and returns the BGR image.
+        """
+        bgr = cv2.cvtColor(image, cv2.COLOR_GRAY2BGR)
+
+        # Add padding to all sides
+        bgr = cv2.copyMakeBorder(bgr, padding, padding, padding, padding,
+                                 cv2.BORDER_CONSTANT, value=(0, 0, 0))
+
+        # Sonar origin in pixel coordinates (bottom center, offset by padding)
+        origin_x = padding + self.cart_width // 2
+        origin_y = padding + self.cart_height
+
+        grid_color = (0, 200, 0)       # green
+        text_color = (0, 255, 0)        # bright green
+        line_thickness = 1
+        font = cv2.FONT_HERSHEY_SIMPLEX
+
+        # Scale font size relative to image height
+        font_scale = max(0.3, self.cart_height / 1500.0)
+
+        # --- Range rings ---
+        # Choose ring spacing based on range extent
+        range_extent = self.rmax - self.rmin
+        if range_extent <= 2.0:
+            ring_step = 0.25
+        elif range_extent <= 5.0:
+            ring_step = 0.5
+        else:
+            ring_step = 1.0
+
+        # Draw rings from rmin to rmax
+        r = math.ceil(self.rmin / ring_step) * ring_step
+        while r <= self.rmax:
+            radius_px = int(r * self.pixels_per_meter)
+            if radius_px > 0:
+                # Draw arc only within the field of view
+                start_angle = 270 - self.half_fov_deg
+                end_angle = 270 + self.half_fov_deg
+                cv2.ellipse(bgr, (origin_x, origin_y), (radius_px, radius_px),
+                            0, start_angle, end_angle, grid_color, line_thickness)
+
+                # Label at the right edge of the arc
+                label_angle_rad = math.radians(self.half_fov_deg)
+                label_x = int(origin_x + r * math.sin(label_angle_rad) * self.pixels_per_meter)
+                label_y = int(origin_y - r * math.cos(label_angle_rad) * self.pixels_per_meter)
+                cv2.putText(bgr, '%.1fm' % r, (label_x + 3, label_y),
+                            font, font_scale, text_color, 1, cv2.LINE_AA)
+            r += ring_step
+
+        # --- Angle lines ---
+        # Draw radial lines at regular angle intervals
+        if self.half_fov_deg <= 15:
+            angle_step = 5.0
+        else:
+            angle_step = 10.0
+
+        angle = -self.half_fov_deg
+        while angle <= self.half_fov_deg:
+            angle_rad = math.radians(angle)
+            # Line from rmin to rmax along this angle
+            x1 = int(origin_x + self.rmin * math.sin(angle_rad) * self.pixels_per_meter)
+            y1 = int(origin_y - self.rmin * math.cos(angle_rad) * self.pixels_per_meter)
+            x2 = int(origin_x + self.rmax * math.sin(angle_rad) * self.pixels_per_meter)
+            y2 = int(origin_y - self.rmax * math.cos(angle_rad) * self.pixels_per_meter)
+            cv2.line(bgr, (x1, y1), (x2, y2), grid_color, line_thickness)
+
+            # Label at the outer end
+            if angle != 0:
+                cv2.putText(bgr, '%ddeg' % int(angle), (x2 + 3, y2 - 3),
+                            font, font_scale, text_color, 1, cv2.LINE_AA)
+            angle += angle_step
+
+        return bgr
 
     def sync_callback(self, polar_msg, sonar_info):
         """Handle synchronized polar image and sonar info messages."""
@@ -184,8 +270,11 @@ class PolarToCartesianConverter(object):
             # Apply mapping
             cartesian_cv = self.apply_mapping(polar_cv)
 
+            # Draw grid overlay (converts to BGR)
+            cartesian_bgr = self.draw_grid_overlay(cartesian_cv)
+
             # Publish with same header (timestamp + frame_id)
-            cart_msg = self.bridge.cv2_to_imgmsg(cartesian_cv, encoding='mono8')
+            cart_msg = self.bridge.cv2_to_imgmsg(cartesian_bgr, encoding='bgr8')
             cart_msg.header = polar_msg.header
             self.cartesian_pub.publish(cart_msg)
 
