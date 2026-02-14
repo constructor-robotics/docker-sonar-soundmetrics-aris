@@ -24,12 +24,8 @@ SOFTWARE.
 """
 
 import rospy
-import tf
 from cv_bridge import CvBridge,CvBridgeError
-
 from sensor_msgs.msg import Image
-from sensor_msgs.msg import Range
-from geometry_msgs.msg import PoseStamped
 
 from soundmetrics_aris_drivers.msg import SonarInfo
 from soundmetrics_aris_drivers.srv import SetSonarParams, SetSonarParamsResponse
@@ -39,7 +35,6 @@ import socket
 import struct
 import threading
 import numpy as np
-import math
 import subprocess
 import sys
 
@@ -139,7 +134,6 @@ class SoundMetricsAris3000(object) :
         self.window_length = 3.5
         self.ixsize = 350
         self.sound_velocity = 1500.0
-        self.tf_array = [0.0, 0.0, 0.0, 1.57, 0.0, 1.57]
         self.offset_fls_to_dvl = 0.25
         self.local_ip = "169.254.7.10"
         self.sender_ip = "169.254.7.147"
@@ -228,8 +222,7 @@ class SoundMetricsAris3000(object) :
 
         ### Create ROS Publishers and Services
         # Create publisher
-        self.polar_pub = rospy.Publisher(self.publisher_topic + 'polar', Image, queue_size = 2)
-        self.cart_pub = rospy.Publisher(self.publisher_topic + 'cartesian', Image, queue_size = 2)
+        self.polar_pub = rospy.Publisher(self.publisher_topic + 'image/raw', Image, queue_size = 2)
         self.sonar_info_pub = rospy.Publisher(self.publisher_topic + 'sonar_info', SonarInfo, queue_size = 2)
         # Create Service
         self.load_configuration_srv = rospy.Service( self.publisher_topic + 'configuration', SetSonarParams, self.set_configuration)
@@ -284,6 +277,7 @@ class SoundMetricsAris3000(object) :
         self.use_64_bit_os = rospy.get_param('~use_64_bit_os', True)
         self.local_network_interface_name = rospy.get_param('~local_network_interface_name', "")
         self.publisher_topic = rospy.get_param('~publisher_topic', "/cola2_perception/soundmetrics_aris3000/")
+        self.frame_id = rospy.get_param('~frame_id', "aris3000")
         self.frame_period_sec = rospy.get_param('~frame_period_sec', 1.0)
         self.gain = rospy.get_param('~gain', 24)
         self.frequency = rospy.get_param('~frequency', 1)
@@ -294,7 +288,6 @@ class SoundMetricsAris3000(object) :
         self.window_start = rospy.get_param('~window_start', 0.7)
         self.window_length = rospy.get_param('~window_length', 3.5)
         self.ixsize = rospy.get_param('~cartesian_width', 350)
-        self.tf_array = rospy.get_param('~tf', [0.0, 0.0, 0.0, 1.57, 0.0, 1.57])
         self.sound_velocity = rospy.get_param('~sound_velocity', 1500.0)
         self.local_ip = rospy.get_param('~local_ip', "169.254.7.10")
         self.sender_ip = rospy.get_param('~sender_ip', "169.254.7.147")
@@ -452,24 +445,31 @@ class SoundMetricsAris3000(object) :
         # time.sleep(0.01)
 
 
-    def read_ARIS_image(self):
+    def read_sonar_image(self):
         """ Read ARIS3000 acoustic images """
         self.lock.acquire()
 
         if self.need_sync:
             rospy.loginfo('%s: Wait image sync', self.name)
+            self.udp_data.settimeout(5.0)
             # Sync with first bundle
             while self.need_sync:
-                header = self.udp_data.recv(HEADER_SIZE_BYTES)
+                try:
+                    header = self.udp_data.recv(HEADER_SIZE_BYTES)
+                except socket.timeout:
+                    rospy.logwarn('%s: No UDP data received on port %d within 5s, retrying...', self.name, UDP_DATA_PORT)
+                    continue
                 header_fmt = list(struct.unpack('< 17I', header))
-                # print 'ARIS DATA: \n', header_fmt
+                rospy.logdebug('%s: Sync packet - body_size=%d, packet_num=%d, total_packets=%d',
+                               self.name, header_fmt[5], header_fmt[11], header_fmt[12])
 
                 # check if there is data in the body and the number of
                 # transaction is the last one of the frame
                 if header_fmt[5] > 0 and header_fmt[12]-1 == header_fmt[11]:
                     self.bundle_size = header_fmt[12]
-                    print('bundle_size: ', self.bundle_size)
+                    rospy.loginfo('%s: Synced - bundle_size=%d', self.name, self.bundle_size)
                     self.need_sync = False
+                    self.udp_data.settimeout(None)
                     rospy.loginfo('%s: Reading data', self.name)
 
         # Read sonar image
@@ -488,27 +488,6 @@ class SoundMetricsAris3000(object) :
 
         ordered_image = self.reorder_samples(img)
 
-        polar_arr = np.asarray(ordered_image).flatten(1)
-        polar_arr[0] = 0
-        cart_image = polar_arr[np.ix_(self.mapvector.astype(int))]
-        cart_image = np.asarray(cart_image.reshape(self.iysize,
-                                                   self.ixsize,
-                                                   order='F'), order="C")
-        # Publish data
-        # images must be char unsigned arrays: dtype=np.uint8
-        try:
-            cv_cart_image_bgr = cv2.cvtColor(cart_image,  cv2.COLOR_GRAY2BGR)
-            if self.debug:
-                cv2.imshow("cart_image", cv_cart_image_bgr)
-                cv2.waitKey(1)
-
-            cart_img_msg = self.bridge.cv2_to_imgmsg(cv_cart_image_bgr, encoding="bgr8")	
-            #cart_img_msg = self.bridge.cv2_to_imgmsg(cart_image, "mono8")
-            cart_img_msg.header.stamp = rospy.Time().now()
-            self.cart_pub.publish(cart_img_msg)
-        except CvBridgeError as e:
-            print(e)
-
         try:
             cv_ordered_image_bgr = cv2.cvtColor(ordered_image,  cv2.COLOR_GRAY2BGR)
             if self.debug:
@@ -516,12 +495,13 @@ class SoundMetricsAris3000(object) :
                 cv2.waitKey(1)
             polar_img_msg = self.bridge.cv2_to_imgmsg(cv_ordered_image_bgr, encoding="bgr8")	
             #polar_img_msg = self.bridge.cv2_to_imgmsg(ordered_image, "mono8")
-            polar_img_msg.header.stamp = cart_img_msg.header.stamp
+            polar_img_msg.header.stamp = rospy.Time().now()
+            polar_img_msg.header.frame_id = self.frame_id
             self.polar_pub.publish(polar_img_msg)
         except CvBridgeError as e:
-            print(e)
+            rospy.logwarn('CvBridgeError: %s', e)
 
-        sonar_info.header.stamp = cart_img_msg.header.stamp
+        sonar_info.header.stamp = polar_img_msg.header.stamp
         self.sonar_info_pub.publish(sonar_info)
 
         self.lock.release()
@@ -561,69 +541,8 @@ class SoundMetricsAris3000(object) :
                                        self.beams,
                                        order='C').copy()
 
-        #image = Image.fromarray(reordered_mat)
-        #print image.tostring()
-        #image.show()
-        return np.asarray(np.fliplr(reordered_mat), order='C') #outbuf
-        # return reordered_mat
 
-    def map_scan(self, rmax, rmin):
-        """ Computes cartesian image height as well as a map vector
-            to transform a polar image into a cartesian one. """
-
-
-        # precalcualtion of constants used in do loop below
-        # (bottom of image frame to r,theta origin in meters)
-        d3 = rmin * math.cos(math.radians(HALF_FIELD_OF_VIEW))
-
-        # samples/m
-        c1 = (self.samples_per_beam)/(rmax-rmin)
-
-        # beams/deg
-        c2 = (self.beams)/(2 * HALF_FIELD_OF_VIEW)
-
-        # Ratio pixel/meters will depend on number of samples
-        gamma = self.samples_per_beam/(rmax-rmin)
-        #gamma= self.ixsize/(2 * rmax * math.sin(math.radians(HALF_FIELD_OF_VIEW)))
-
-        # number of pixels in image in vertical direction (forced to odd)
-        iysize = math.floor( gamma * (rmax - d3) )
-        if not iysize%2:
-            iysize = iysize-1
-
-        # number of pixels in image in vertical direction (forced to odd)
-        ixsize =  math.floor(gamma * (2 * rmax * math.sin(math.radians(HALF_FIELD_OF_VIEW))))
-        if not ixsize%2:
-            ixsize = ixsize-1
-
-        # make vector and fill in later
-        svector = np.zeros(ixsize * iysize)
-        # pixels in x dimension
-        ix = np.arange(ixsize)
-        # convert from pixels to meters
-        x = ((ix) - ixsize/2 + 0.5)/gamma #0.5 so that the vector is symmetric
-
-        for iy in np.arange(iysize):
-            # convert from pixels to meters
-            y = rmax - (iy)/gamma
-            # convert to polar cooridinates
-            r = np.sqrt(y*y + x*x)
-            # theta is in degrees
-            theta = np.degrees(np.arctan2(x, y))
-            # the rangebin number
-            binnum = np.floor((r - rmin) * c1 )
-            # the linear function to get beam number
-            beamnum = np.floor((theta + HALF_FIELD_OF_VIEW) * c2 )
-            #find position in sample array expressed as a vector
-            #make pos = 0 if outside sector, else give it the offset in the sample array
-            pos = (beamnum >= 0)*(beamnum < self.beams)*(binnum >= 0)*(binnum < self.samples_per_beam)*((beamnum-1)*self.samples_per_beam + binnum)
-            indvec = (ix)*iysize + iy
-            # The offset in this array is the pixel offset in the image array
-            # The value at this offset is the offset in the sample array
-            svector[np.ix_(indvec.astype(int))] = pos.copy()
-
-        mapvector = svector
-        return mapvector, int(iysize), int(ixsize)
+        return np.asarray(np.fliplr(reordered_mat), order='C')
 
 
     def read_frame_header(self, frameheader):
@@ -653,7 +572,7 @@ class SoundMetricsAris3000(object) :
         
         sonar_info = SonarInfo()
         sonar_info.header.stamp = rospy.Time().now()
-        sonar_info.header.frame_id = 'aris3000'
+        sonar_info.header.frame_id = self.frame_id
         sonar_info.index = frame_header_fields[0]
         sonar_info.time = frame_header_fields[1]
         # sonar_info.version = frame_header_fields[2]
@@ -680,16 +599,13 @@ class SoundMetricsAris3000(object) :
         sonar_info.samples_per_beam = frame_header_fields[112]
         sonar_info.salinity = frame_header_fields[124]
         
-        [res, sonar_info.beams, res, success] = self.get_beams_and_pings(sonar_info.ping_mode)
+        [res, sonar_info.beams, sonar_info.pings_per_frame, success] = self.get_beams_and_pings(sonar_info.ping_mode)
+        sonar_info.half_field_of_view = HALF_FIELD_OF_VIEW
         if not success:
             self.need_sync = True
+            rospy.logwarn("Invalid sonar ping mode, %d", sonar_info.ping_mode)
+            rospy.logwarn("Synchronization needed ...")
 
-        elif(sonar_info.window_length != self.window_length or
-            sonar_info.window_start != self.window_start):
-            self.mapvector, self.iysize, self.ixsize = self.map_scan(sonar_info.window_length + sonar_info.window_start,
-                                                        sonar_info.window_start)
-            self.window_length = sonar_info.window_length
-            self.window_start = sonar_info.window_start
 
         return sonar_info
 
@@ -701,6 +617,67 @@ if __name__ == '__main__':
         soundmetrics_aris3000 = SoundMetricsAris3000(rospy.get_name())
         while not rospy.is_shutdown():
             pass
-            # soundmetrics_aris3000.read_ARIS_image()
+            soundmetrics_aris3000.read_sonar_image()
     except rospy.ROSInterruptException:
         pass
+
+
+
+
+# def map_scan(self, rmax, rmin):
+#         """ Computes cartesian image height as well as a map vector
+#             to transform a polar image into a cartesian one. """
+
+
+#         # precalcualtion of constants used in do loop below
+#         # (bottom of image frame to r,theta origin in meters)
+#         d3 = rmin * math.cos(math.radians(HALF_FIELD_OF_VIEW))
+
+#         # samples/m
+#         c1 = (self.samples_per_beam)/(rmax-rmin)
+
+#         # beams/deg
+#         c2 = (self.beams)/(2 * HALF_FIELD_OF_VIEW)
+
+#         # Ratio pixel/meters will depend on number of samples
+#         gamma = self.samples_per_beam/(rmax-rmin)
+#         #gamma= self.ixsize/(2 * rmax * math.sin(math.radians(HALF_FIELD_OF_VIEW)))
+
+#         # number of pixels in image in vertical direction (forced to odd)
+#         iysize = math.floor( gamma * (rmax - d3) )
+#         if not iysize%2:
+#             iysize = iysize-1
+
+#         # number of pixels in image in vertical direction (forced to odd)
+#         ixsize =  math.floor(gamma * (2 * rmax * math.sin(math.radians(HALF_FIELD_OF_VIEW))))
+#         if not ixsize%2:
+#             ixsize = ixsize-1
+
+#         # make vector and fill in later
+#         svector = np.zeros(ixsize * iysize)
+#         # pixels in x dimension
+#         ix = np.arange(ixsize)
+#         # convert from pixels to meters
+#         x = ((ix) - ixsize/2 + 0.5)/gamma #0.5 so that the vector is symmetric
+
+#         for iy in np.arange(iysize):
+#             # convert from pixels to meters
+#             y = rmax - (iy)/gamma
+#             # convert to polar cooridinates
+#             r = np.sqrt(y*y + x*x)
+#             # theta is in degrees
+#             theta = np.degrees(np.arctan2(x, y))
+#             # the rangebin number
+#             binnum = np.floor((r - rmin) * c1 )
+#             # the linear function to get beam number
+#             beamnum = np.floor((theta + HALF_FIELD_OF_VIEW) * c2 )
+#             #find position in sample array expressed as a vector
+#             #make pos = 0 if outside sector, else give it the offset in the sample array
+#             pos = (beamnum >= 0)*(beamnum < self.beams)*(binnum >= 0)*(binnum < self.samples_per_beam)*((beamnum-1)*self.samples_per_beam + binnum)
+#             indvec = (ix)*iysize + iy
+#             # The offset in this array is the pixel offset in the image array
+#             # The value at this offset is the offset in the sample array
+#             svector[np.ix_(indvec.astype(int))] = pos.copy()
+
+#         mapvector = svector
+#         return mapvector, int(iysize), int(ixsize)

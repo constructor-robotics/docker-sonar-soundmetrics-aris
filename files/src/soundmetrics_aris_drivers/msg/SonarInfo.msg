@@ -23,5 +23,7 @@ float32 frame_rate
 float32 sound_speed
 uint32 samples_per_beam
 uint32 beams
+uint32 pings_per_frame
+float32 half_field_of_view
 uint32 salinity
 
