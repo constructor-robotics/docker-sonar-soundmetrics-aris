@@ -102,7 +102,7 @@ CYCLE_PERIOD_MIN = 1802
 CYCLE_PERIOD_MAX = 60000                        #Documentation says 150000, need to check
 
 
-class SoundMetricsAris3000(object) :
+class SonarSoundMetricsAris3000(object) :
     """ This class configures and receive images from Sound Metrics
         ARIS3000 forward looking sonar. """
 
@@ -614,7 +614,7 @@ class SoundMetricsAris3000(object) :
 if __name__ == '__main__':
     try:
         rospy.init_node('soundmetrics_aris3000')
-        soundmetrics_aris3000 = SoundMetricsAris3000(rospy.get_name())
+        soundmetrics_aris3000 = SonarSoundMetricsAris3000(rospy.get_name())
         while not rospy.is_shutdown():
             pass
             soundmetrics_aris3000.read_sonar_image()
