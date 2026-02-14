@@ -74,6 +74,38 @@ P2_X2_RESET = 38
 ARIS_NUMBER_A2D_CHANNELS = 16
 HALF_FIELD_OF_VIEW = 14.4 #14.4
 
+# PORT DEFINITIONS
+TCP_COMMAND_PORT = 56888
+UDP_DATA_PORT = 56444
+UDP_AVAILABILITY_PORT = 56123
+COMMAND_DEST_PORT = 56555
+
+# PROTOCOL CONSTANTS
+HEADER_SIZE_BYTES = 68
+PAYLOAD_SIZE_BYTES = 1332
+FRAME_HEADER_SIZE_BYTES = 1024
+COMMAND_HEADER_MAGIC_1 = 2175520024
+COMMAND_HEADER_MAGIC_2 = 2868936984
+PROTOCOL_VERSION = 256
+
+# TIMING CONSTANTS
+PING_INTERVAL_SEC = 3.0
+CYCLE_PERIOD_OVERHEAD_USEC = 360
+
+# PARAMETER LIMITS
+FRAME_PERIOD_SEC_MIN = 0.075                    # This means max frame rate is 13.33 Hz, in manual is 15 Hz
+FRAME_PERIOD_SEC_MAX = 1.0
+GAIN_MIN = 0
+GAIN_MAX = 24                                   # Suggested initial value is 12
+FOCUS_MIN = 0
+FOCUS_MAX = 1000                                # Focus range in meters
+SAMPLE_START_DELAY_MIN = 930                    #~0.7 meters
+SAMPLE_START_DELAY_MAX = 60000                  #~45 meters
+SAMPLE_PERIOD_MIN = 4
+SAMPLE_PERIOD_MAX = 500                         #Documentation says 100, need to check
+CYCLE_PERIOD_MIN = 1802
+CYCLE_PERIOD_MAX = 60000                        #Documentation says 150000, need to check
+
 
 class SoundMetricsAris3000(object) :
     """ This class configures and receive images from Sound Metrics
@@ -135,13 +167,6 @@ class SoundMetricsAris3000(object) :
         ### NOTE: This line in case IP is extracted automatically - to be tested
         # self.local_IP = subprocess.getoutput("/sbin/ifconfig").split("\n")[self.getNetworkInterface(self.local_network_interface_name)+1].split()[1][5:]
 
-
-        # Use IPs from config
-        self.local_IP = self.local_ip
-        ip = self.local_IP.split('.')
-        self.local_IP_dec = (int(ip[0]) << 24) + (int(ip[1]) << 16) + (int(ip[2]) << 8) + int(ip[3])
-        rospy.loginfo('%s: Local ip: %s', self.name, self.local_IP)
-
         ### NOTE: The following block extracts the sensor IP by parsing a UDP package
         ### Needs to be tested for reliabilty, it sometimes gives 0 at boot
 
@@ -166,7 +191,13 @@ class SoundMetricsAris3000(object) :
         # self.sender_IP_text = (str(byte_1) + '.' + str(byte_2) + '.' +
         #                     str(byte_3) + '.' + str(byte_4))
 
-        ### ------------------------------------------------------------------------------
+        ### ------------------------------------------------------------------------------  
+
+        # Use IPs from config
+        self.local_IP = self.local_ip
+        ip = self.local_IP.split('.')
+        self.local_IP_dec = (int(ip[0]) << 24) + (int(ip[1]) << 16) + (int(ip[2]) << 8) + int(ip[3])
+        rospy.loginfo('%s: Local ip: %s', self.name, self.local_IP)
 
         self.sender_IP_text = self.sender_ip
         parts = self.sender_IP_text.split('.')
@@ -176,10 +207,10 @@ class SoundMetricsAris3000(object) :
         # Create TCP socket at localhost:56888
         try:
             self.tcp = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            self.tcp.connect((self.sender_IP_text, 56888))
+            self.tcp.connect((self.sender_IP_text, TCP_COMMAND_PORT))
             self.tcp.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
         except socket.error as e:
-            rospy.logfatal('%s: Failed to create TCP connection to %s:56888 - %s', self.name, self.sender_IP_text, e)
+            rospy.logfatal('%s: Failed to create TCP connection to %s:%d - %s', self.name, self.sender_IP_text, TCP_COMMAND_PORT, e)
             raise
 
         # Send inital configuration
@@ -192,8 +223,8 @@ class SoundMetricsAris3000(object) :
 
         # Open data receive port
         self.udp_data = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        self.udp_data.bind(('', 56444))
-        rospy.loginfo('%s: UDP DATA @ 56444 connected!', self.name)
+        self.udp_data.bind(('', UDP_DATA_PORT))
+        rospy.loginfo('%s: UDP DATA @ %d connected!', self.name, UDP_DATA_PORT)
 
         ### Create ROS Publishers and Services
         # Create publisher
@@ -269,6 +300,7 @@ class SoundMetricsAris3000(object) :
         self.sender_ip = rospy.get_param('~sender_ip', "169.254.7.147")
 
         [self.mode, self.beams, self.pings, success] = self.get_beams_and_pings(self.ping_mode)
+        # Repack the float values as an unsigned 32-bit integer representing a binary value
         self.gain_binary = struct.unpack('I', struct.pack('f', self.gain))[0]
 
     def send_ping(self):
@@ -277,24 +309,20 @@ class SoundMetricsAris3000(object) :
             # Send ping
             cmd = self.create_command(PING, [0, 0, 0, 0, 0, 0])
             self.send_command(cmd)
-            rospy.sleep(3.0)
+            rospy.sleep(PING_INTERVAL_SEC)
 
 
     def set_configuration(self, req):
         """ Service to change Sonar configuration """
         self.lock.acquire()
-	#self.debug = req.debug
-	#self.use_64_bit_os = req.use_64_bit_os 
-	#self.local_network_interface_name = req.local_network_interface_name
-	#self.publisher_topic = req.publisher_topic
+        #self.debug = req.debug
+        #self.use_64_bit_os = req.use_64_bit_os 
+        #self.local_network_interface_name = req.local_network_interface_name
+        #self.publisher_topic = req.publisher_topic
         self.frame_period_sec = req.frame_period_sec
 
         # Set receiver gain
-        self.gain = req.gain
-        if self.gain < 0:
-            self.gain = 0
-        elif self.gain > 24:
-            self.gain = 24
+        self.gain = max(GAIN_MIN, min(req.gain, GAIN_MAX))
         self.gain_binary = struct.unpack('I', struct.pack('f', req.gain))[0]
 
         if req.frequency_hi:
@@ -322,14 +350,12 @@ class SoundMetricsAris3000(object) :
         rospy.loginfo('%s: Config sonar', self.name)
 
         # Set sonar frame rate
-        if self.frame_period_sec < 0.075:
-            self.frame_period_sec = 0.075
-        elif self.frame_period_sec > 1.0:
-            self.frame_period_sec = 1.0
+        self.frame_period_sec = max(FRAME_PERIOD_SEC_MIN, min(self.frame_period_sec, FRAME_PERIOD_SEC_MAX))
         cmd = self.create_command(P2_SET_TARGET_FRAME_PERIOD_USEC,
                                  [int(self.frame_period_sec*1e6), 0, 0, 0, 0, 0])
         self.send_command(cmd)
 
+        # Set sonar binary gain
         cmd = self.create_command(P2_SET_RECEIVER_GAIN,
                                  [self.gain_binary, 0, 0, 0, 0, 0])
         self.send_command(cmd)
@@ -340,10 +366,7 @@ class SoundMetricsAris3000(object) :
         self.send_command(cmd)
 
         # Set focus
-        if self.focus < 0:
-            self.focus = 0
-        elif self.focus > 1000:
-            self.focus = 1000
+        self.focus = max(FOCUS_MIN, min(self.focus, FOCUS_MAX))
         cmd = self.create_command(P2_SET_FOCUS,
                                  [self.focus, 0, 0, 0, 0, 0])
         self.send_command(cmd)
@@ -354,50 +377,40 @@ class SoundMetricsAris3000(object) :
         self.send_command(cmd)
 
         # Set sonar frame rate
-        cmd = self.create_command(P2_SET_TARGET_FRAME_PERIOD_USEC,
-                                 [self.frame_period_sec*1e6, 0, 0, 0, 0, 0])
-        self.send_command(cmd)
+        # cmd = self.create_command(P2_SET_TARGET_FRAME_PERIOD_USEC,
+        #                          [self.frame_period_sec*1e6, 0, 0, 0, 0, 0])
+        #self.send_command(cmd)
 
+        # Compute and set sonar parameters
         sample_start_delay = float(self.window_start * 2 / self.sound_velocity)*10**6
-        if sample_start_delay < 930:
-            sample_start_delay = 930
-        elif sample_start_delay > 60000:
-            sample_start_delay = 60000
+        sample_start_delay = max(SAMPLE_START_DELAY_MIN, min(sample_start_delay, SAMPLE_START_DELAY_MAX))
 
         sample_period = (float(self.window_length * 2) /
                         float(self.samples_per_beam * self.sound_velocity)*10**6)
-        print('window_length: ', self.window_length)
-        print('samples_per_beam: ', self.samples_per_beam)
-        print('sound_velocity: ', self.sound_velocity)
-        print('sample period: ', sample_period)
-
-        if sample_period < 4:
-            sample_period = 4
-        elif sample_period > 500:
-            sample_period = 500
+        sample_period = max(SAMPLE_PERIOD_MIN, min(sample_period, SAMPLE_PERIOD_MAX))
 
         cycle_period = (sample_start_delay +
-                        self.samples_per_beam * sample_period + 360)
+                        self.samples_per_beam * sample_period + CYCLE_PERIOD_OVERHEAD_USEC)
+        cycle_period = max(CYCLE_PERIOD_MIN, min(cycle_period, CYCLE_PERIOD_MAX))
 
-        print('cycle period: ', cycle_period)
+        rospy.loginfo('window_length: %f', self.window_length)
+        rospy.loginfo('samples_per_beam: %f', self.samples_per_beam)
+        rospy.loginfo('sound_velocity: %f', self.sound_velocity)
+        rospy.loginfo('sample period: %f', sample_period)
+        rospy.loginfo('cycle period: %f', cycle_period)
 
-        if cycle_period < 1802:
-            cycle_period = 1802
-        elif cycle_period > 60000:
-            cycle_period = 60000
-
-        # Set sonar parameters
         cmd = self.create_command(P2_SET_SONAR_PARAMS,
                                  [self.ping_mode, sample_start_delay,
                                   sample_period, cycle_period,
                                   self.samples_per_beam, 0])
         self.send_command(cmd)
 
+        # Set extra parameters
         cmd = self.create_command(P2_SET_TRANSMIT_ENABLE, [1, 0, 0, 0, 0, 0])
         self.send_command(cmd)
-
         cmd = self.create_command(P2_V150_ENABLE, [1, 0, 0, 0, 0, 0])
         self.send_command(cmd)
+
 
         self.lock.release()
 
@@ -409,15 +422,15 @@ class SoundMetricsAris3000(object) :
         [header_fmt.append(0) for i in range(17)]
 
         header_fmt[0] = 0                   # Checksum
-        header_fmt[1] = 2175520024          # Fix 1
-        header_fmt[2] = 2868936984          # Fix 2
-        header_fmt[3] = 256                 # Version
+        header_fmt[1] = COMMAND_HEADER_MAGIC_1
+        header_fmt[2] = COMMAND_HEADER_MAGIC_2
+        header_fmt[3] = PROTOCOL_VERSION
         header_fmt[4] = cmd                 # Command
         header_fmt[5] = 0                   # Body size
         header_fmt[6] = self.local_IP_dec   # Local IP
         header_fmt[7] = 0                   # port
         header_fmt[8] = self.sender_IP      # ARIS IP
-        header_fmt[9] = 56555               # port
+        header_fmt[9] = COMMAND_DEST_PORT
         header_fmt[10] = self.nt            # transaction number
         header_fmt[11:] = [int(x) for x in params]
 
@@ -427,7 +440,7 @@ class SoundMetricsAris3000(object) :
 
         header = self.compute_checksum(header_fmt)
         self.nt = self.nt + 1
-        
+
         return header
 
 
@@ -447,7 +460,7 @@ class SoundMetricsAris3000(object) :
             rospy.loginfo('%s: Wait image sync', self.name)
             # Sync with first bundle
             while self.need_sync:
-                header = self.udp_data.recv(68)
+                header = self.udp_data.recv(HEADER_SIZE_BYTES)
                 header_fmt = list(struct.unpack('< 17I', header))
                 # print 'ARIS DATA: \n', header_fmt
 
@@ -462,11 +475,11 @@ class SoundMetricsAris3000(object) :
         # Read sonar image
         img = []
         for i in range(self.bundle_size):
-            data = self.udp_data.recv(68+1332)
-            packet = struct.unpack('17I ' + str(len(data)-68) + 'B', data)
+            data = self.udp_data.recv(HEADER_SIZE_BYTES + PAYLOAD_SIZE_BYTES)
+            packet = struct.unpack('17I ' + str(len(data) - HEADER_SIZE_BYTES) + 'B', data)
             if i == 0:
                 frame_header = list(packet)[17:1041]
-                sonar_info = self.read_frame_header(struct.pack('<1024B', *frame_header))
+                sonar_info = self.read_frame_header(struct.pack('<%dB' % FRAME_HEADER_SIZE_BYTES, *frame_header))
                 img = img + list(packet)[1041:]
             else:
                 img = img + list(packet)[17:]
