@@ -112,7 +112,6 @@ class SonarSoundMetricsAris3000(object) :
         self.local_network_interface_name = ""
 
         #debug images 
-        self.debug = True
         self.use_64_bit_os = True 
         self.publisher_topic = "/soundmetrics_aris3000/"
 
@@ -273,7 +272,6 @@ class SonarSoundMetricsAris3000(object) :
     def get_config(self):
         """ Read configurations from ROS PARAM SERVER """
         
-        self.debug = rospy.get_param('~debug', True)
         self.use_64_bit_os = rospy.get_param('~use_64_bit_os', True)
         self.local_network_interface_name = rospy.get_param('~local_network_interface_name', "")
         self.publisher_topic = rospy.get_param('~publisher_topic', "/cola2_perception/soundmetrics_aris3000/")
@@ -370,9 +368,10 @@ class SonarSoundMetricsAris3000(object) :
         self.send_command(cmd)
 
         # Set sonar frame rate
-        # cmd = self.create_command(P2_SET_TARGET_FRAME_PERIOD_USEC,
-        #                          [self.frame_period_sec*1e6, 0, 0, 0, 0, 0])
-        #self.send_command(cmd)
+        # NOTE: Although this value was already set, it needs to be sent again to ensure the sonar is configured correctly (Reverse engineered)
+        cmd = self.create_command(P2_SET_TARGET_FRAME_PERIOD_USEC,
+                                 [self.frame_period_sec*1e6, 0, 0, 0, 0, 0])
+        self.send_command(cmd)
 
         # Compute and set sonar parameters
         sample_start_delay = float(self.window_start * 2 / self.sound_velocity)*10**6
@@ -427,6 +426,9 @@ class SonarSoundMetricsAris3000(object) :
         header_fmt[10] = self.nt            # transaction number
         header_fmt[11:] = [int(x) for x in params]
 
+        # print("===================================")
+        # print(header_fmt)
+
         for i, val in enumerate(header_fmt):
             if not isinstance(val, int):
                 raise TypeError(f"header_fmt[{i}] = {val} is not an int")
@@ -455,7 +457,7 @@ class SonarSoundMetricsAris3000(object) :
             # Sync with first bundle
             while self.need_sync:
                 try:
-                    header = self.udp_data.recv(HEADER_SIZE_BYTES)
+                    header = self.udp_data.recv(68)
                 except socket.timeout:
                     rospy.logwarn('%s: No UDP data received on port %d within 5s, retrying...', self.name, UDP_DATA_PORT)
                     continue
@@ -490,9 +492,6 @@ class SonarSoundMetricsAris3000(object) :
 
         try:
             cv_ordered_image_bgr = cv2.cvtColor(ordered_image,  cv2.COLOR_GRAY2BGR)
-            if self.debug:
-                cv2.imshow("ordered image", cv_ordered_image_bgr)
-                cv2.waitKey(1)
             polar_img_msg = self.bridge.cv2_to_imgmsg(cv_ordered_image_bgr, encoding="bgr8")	
             #polar_img_msg = self.bridge.cv2_to_imgmsg(ordered_image, "mono8")
             polar_img_msg.header.stamp = rospy.Time().now()

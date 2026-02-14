@@ -1,21 +1,20 @@
-debug: True
 use_64_bit_os: True
 local_network_interface_name: "enp4s0"
 publisher_topic: "/soundmetrics_aris3000/"
 frame_id: "aris3000"
 local_ip: "169.254.7.10"
 sender_ip: "169.254.7.147"
-frame_period_sec: 0.1
+frame_period_sec: 0.2
 gain: 24
-frequency: 3
-focus: 380
+frequency: 1
+focus: 364
 pulse_width: 8
 ping_mode: 9
-samples_per_beam: 512
+samples_per_beam: 1024
 window_start: 1.2
 window_length: 2.0
-sample_period: 10
+sample_period: 9
 cartesian_width: 350
-sound_velocity: 1488.0
+sound_velocity: 1500
 
 

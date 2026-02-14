@@ -1,5 +1,3 @@
-# the debug window needs to be OFF (=False) because otherwise the network latency is too high and the driver keeps crashing
-debug: False
 use_64_bit_os: True
 local_network_interface_name: "eth0"
 publisher_topic: "/soundmetrics_aris3000/"
@@ -16,7 +14,4 @@ window_length: 2.0
 sample_period: 9
 cartesian_width: 350
 sound_velocity: 1500.0
-# Transformation wrt vehicle frame: [x, y, z, roll, pitch, yaw] (in meters and degrees!)
-tf: [0.25, 0.0, 0.4, 80.0, 0.0, 90.0] # Pointing like a forward camera!
-
 

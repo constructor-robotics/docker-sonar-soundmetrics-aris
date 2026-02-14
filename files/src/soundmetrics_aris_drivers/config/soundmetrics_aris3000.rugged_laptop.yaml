@@ -1,4 +1,3 @@
-debug: True
 use_64_bit_os: True
 local_network_interface_name: "enp4s0"
 publisher_topic: "/soundmetrics_aris3000/"
