@@ -220,11 +220,14 @@ class SonarSoundMetricsAris3000(object) :
         rospy.loginfo('%s: UDP DATA @ %d connected!', self.name, UDP_DATA_PORT)
 
         ### Create ROS Publishers and Services
-        # Create publisher
-        self.polar_pub = rospy.Publisher(self.publisher_topic + 'image/raw', Image, queue_size = 2)
+        # Create publishers
+        # The image below is the polar fan image, where x-axis is the range bins (samples per beam) and y-axis is beam angle (index)
+        self.polar_pub = rospy.Publisher(self.publisher_topic + 'image/polar_fan/raw', Image, queue_size = 2)
         self.sonar_info_pub = rospy.Publisher(self.publisher_topic + 'sonar_info', SonarInfo, queue_size = 2)
-        # Create Service
-        self.load_configuration_srv = rospy.Service( self.publisher_topic + 'configuration', SetSonarParams, self.set_configuration)
+        
+        ## Create Service -- to be tested
+        #self.load_configuration_srv = rospy.Service( self.publisher_topic + 'configuration', SetSonarParams, self.set_configuration)
+        
         self.bridge = CvBridge()
         rospy.loginfo('%s: Finish creating ROS Publishers and Services', self.name)
 
@@ -475,6 +478,7 @@ class SonarSoundMetricsAris3000(object) :
                     rospy.loginfo('%s: Reading data', self.name)
 
         # Read sonar image
+        # ARIS sample data is stored as “one unsigned byte per sample” with valid values 0-255
         img = []
         for i in range(self.bundle_size):
             data = self.udp_data.recv(HEADER_SIZE_BYTES + PAYLOAD_SIZE_BYTES)
@@ -486,14 +490,13 @@ class SonarSoundMetricsAris3000(object) :
             else:
                 img = img + list(packet)[17:]
 
-        # print 'Total img bytes:', len(img)
-
+        # Reorder image and the data comes not in order due to multiplexing of the sensor
         ordered_image = self.reorder_samples(img)
 
         try:
             cv_ordered_image_bgr = cv2.cvtColor(ordered_image,  cv2.COLOR_GRAY2BGR)
-            polar_img_msg = self.bridge.cv2_to_imgmsg(cv_ordered_image_bgr, encoding="bgr8")	
-            #polar_img_msg = self.bridge.cv2_to_imgmsg(ordered_image, "mono8")
+            #polar_img_msg = self.bridge.cv2_to_imgmsg(cv_ordered_image_bgr, encoding="bgr8")	
+            polar_img_msg = self.bridge.cv2_to_imgmsg(ordered_image, "mono8")
             polar_img_msg.header.stamp = rospy.Time().now()
             polar_img_msg.header.frame_id = self.frame_id
             self.polar_pub.publish(polar_img_msg)
@@ -569,6 +572,7 @@ class SonarSoundMetricsAris3000(object) :
         frame_header_fields = struct.unpack('IQIIQIIIIIIffIiIIIIIIffffffffffffffffffffddfIfffIIIIfIfffffffffdfIIIfffIIIIIIIffffff16fffffIIIIIIffIIIIIIQIIIIIIf124I',
                                             offset_64_bit_os + frameheader_bytes)
         
+
         sonar_info = SonarInfo()
         sonar_info.header.stamp = rospy.Time().now()
         sonar_info.header.frame_id = self.frame_id
@@ -594,7 +598,7 @@ class SonarSoundMetricsAris3000(object) :
         sonar_info.sample_period = frame_header_fields[108]
         sonar_info.transmit_enable = (frame_header_fields[109] == 1)
         sonar_info.frame_rate = frame_header_fields[110]
-        sonar_info.sound_speed = frame_header_fields[111]
+        sonar_info.sound_speed = frame_header_fields[111] # NOTE: Need to check if this varies in open-water, so far gives zero
         sonar_info.samples_per_beam = frame_header_fields[112]
         sonar_info.salinity = frame_header_fields[124]
         
