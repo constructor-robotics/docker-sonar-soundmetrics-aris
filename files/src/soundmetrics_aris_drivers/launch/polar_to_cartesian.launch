@@ -1,0 +1,9 @@
+<?xml version="1.0"?>
+<launch>
+    <arg name="topic_prefix" default="/soundmetrics_aris3000/"/>
+
+    <node pkg="soundmetrics_aris_drivers" type="polar_to_cartesian.py"
+          name="polar_to_cartesian" output="screen">
+        <param name="topic_prefix" value="$(arg topic_prefix)"/>
+    </node>
+</launch>
