@@ -1,6 +1,5 @@
 use_64_bit_os: True
 local_network_interface_name: "eth0"
-publisher_topic: "/soundmetrics_aris3000/"
 frame_id: "aris3000"
 frame_period_sec: 0.2
 gain: 24

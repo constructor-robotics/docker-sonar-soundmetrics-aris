@@ -42,9 +42,6 @@ class PolarToCartesianConverter(object):
         # CvBridge for image conversion
         self.bridge = CvBridge()
 
-        # Topic prefix from parameter
-        self.topic_prefix = rospy.get_param('~topic_prefix', '/soundmetrics_aris3000/')
-
         # Mapping cache
         self.cached_params = None
         self.range_bin_map = None
@@ -59,11 +56,11 @@ class PolarToCartesianConverter(object):
 
         # Subscribers using message_filters for time synchronization
         polar_sub = message_filters.Subscriber(
-            self.topic_prefix + 'image/polar_fan/raw',
+            'image/polar/raw',
             Image
         )
         info_sub = message_filters.Subscriber(
-            self.topic_prefix + 'sonar_info',
+            'sonar_info',
             SonarInfo
         )
 
@@ -76,17 +73,17 @@ class PolarToCartesianConverter(object):
 
         # Publisher
         self.cartesian_pub = rospy.Publisher(
-            self.topic_prefix + 'image/cartesian_fan/raw',
+            'image/cartesian_fan/raw',
             Image,
             queue_size=2
         )
 
         rospy.loginfo('%s: Polar-to-Cartesian converter initialized', self.name)
         rospy.loginfo('%s: Subscribing to %s and %s', self.name,
-                      self.topic_prefix + 'image/polar_fan/raw',
-                      self.topic_prefix + 'sonar_info')
+                      rospy.resolve_name('image/polar/raw'),
+                      rospy.resolve_name('sonar_info'))
         rospy.loginfo('%s: Publishing to %s', self.name,
-                      self.topic_prefix + 'image/cartesian_fan/raw')
+                      rospy.resolve_name('image/cartesian_fan/raw'))
 
     def needs_remapping(self, sonar_info):
         """Check if the mapping needs to be recomputed."""

@@ -111,9 +111,8 @@ class SonarSoundMetricsAris3000(object) :
         self.name = name
         self.local_network_interface_name = ""
 
-        #debug images 
-        self.use_64_bit_os = True 
-        self.publisher_topic = "/soundmetrics_aris3000/"
+        #debug images
+        self.use_64_bit_os = True
 
         self.nt = 0
         self.need_sync = True
@@ -222,11 +221,11 @@ class SonarSoundMetricsAris3000(object) :
         ### Create ROS Publishers and Services
         # Create publishers
         # The image below is the polar fan image, where x-axis is the range bins (samples per beam) and y-axis is beam angle (index)
-        self.polar_pub = rospy.Publisher(self.publisher_topic + 'image/polar_fan/raw', Image, queue_size = 2)
-        self.sonar_info_pub = rospy.Publisher(self.publisher_topic + 'sonar_info', SonarInfo, queue_size = 2)
-        
+        self.polar_pub = rospy.Publisher('image/polar/raw', Image, queue_size = 2)
+        self.sonar_info_pub = rospy.Publisher('sonar_info', SonarInfo, queue_size = 2)
+
         ## Create Service -- to be tested
-        #self.load_configuration_srv = rospy.Service( self.publisher_topic + 'configuration', SetSonarParams, self.set_configuration)
+        #self.load_configuration_srv = rospy.Service('configuration', SetSonarParams, self.set_configuration)
         
         self.bridge = CvBridge()
         rospy.loginfo('%s: Finish creating ROS Publishers and Services', self.name)
@@ -277,7 +276,6 @@ class SonarSoundMetricsAris3000(object) :
         
         self.use_64_bit_os = rospy.get_param('~use_64_bit_os', True)
         self.local_network_interface_name = rospy.get_param('~local_network_interface_name', "")
-        self.publisher_topic = rospy.get_param('~publisher_topic', "/cola2_perception/soundmetrics_aris3000/")
         self.frame_id = rospy.get_param('~frame_id', "aris3000")
         self.frame_period_sec = rospy.get_param('~frame_period_sec', 1.0)
         self.gain = rospy.get_param('~gain', 24)

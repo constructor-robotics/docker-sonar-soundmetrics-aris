@@ -1,0 +1,15 @@
+<?xml version="1.0"?>
+<launch>
+	<arg name="ns" default="soundmetrics_aris3000"/>
+	<arg name="enable_cartesian" default="true"/>
+
+	<group ns="$(arg ns)">
+		<node pkg="soundmetrics_aris_drivers" type="soundmetrics_aris3000.py" name="soundmetrics_aris3000" output="screen" respawn="true">
+			<rosparam command="load" file="$(find soundmetrics_aris_drivers)/config/soundmetrics_aris3000__standard.yaml"/>
+		</node>
+
+		<node if="$(arg enable_cartesian)" pkg="soundmetrics_aris_drivers" type="polar_to_cartesian.py"
+		      name="polar_to_cartesian" output="screen"/>
+	</group>
+
+</launch>
