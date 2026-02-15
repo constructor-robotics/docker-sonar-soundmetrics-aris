@@ -133,8 +133,8 @@ class SonarSoundMetricsAris3000(object) :
         self.ixsize = 350
         self.sound_velocity = 1500.0
         self.offset_fls_to_dvl = 0.25
-        self.local_ip = "169.254.7.10"
-        self.sender_ip = "169.254.7.147"
+        self.host_ip = "169.254.7.10"
+        self.sonar_ip = "169.254.7.147"
 
         # Param to be init later
         self.beams = 0
@@ -186,12 +186,12 @@ class SonarSoundMetricsAris3000(object) :
         ### ------------------------------------------------------------------------------  
 
         # Use IPs from config
-        self.local_IP = self.local_ip
+        self.local_IP = self.host_ip
         ip = self.local_IP.split('.')
         self.local_IP_dec = (int(ip[0]) << 24) + (int(ip[1]) << 16) + (int(ip[2]) << 8) + int(ip[3])
         rospy.loginfo('%s: Local ip: %s', self.name, self.local_IP)
 
-        self.sender_IP_text = self.sender_ip
+        self.sender_IP_text = self.sonar_ip
         parts = self.sender_IP_text.split('.')
         self.sender_IP = (int(parts[0]) << 24) + (int(parts[1]) << 16) + (int(parts[2]) << 8) + int(parts[3])
         rospy.loginfo('%s: Sender ip: %s', self.name, self.sender_IP_text)
@@ -288,8 +288,8 @@ class SonarSoundMetricsAris3000(object) :
         self.window_length = rospy.get_param('~window_length', 3.5)
         self.ixsize = rospy.get_param('~cartesian_width', 350)
         self.sound_velocity = rospy.get_param('~sound_velocity', 1500.0)
-        self.local_ip = rospy.get_param('~local_ip', "169.254.7.10")
-        self.sender_ip = rospy.get_param('~sender_ip', "169.254.7.147")
+        self.host_ip = rospy.get_param('~host_ip', "169.254.7.10")
+        self.sonar_ip = rospy.get_param('~sonar_ip', "169.254.7.147")
 
         [self.mode, self.beams, self.pings, success] = self.get_beams_and_pings(self.ping_mode)
         # Repack the float values as an unsigned 32-bit integer representing a binary value

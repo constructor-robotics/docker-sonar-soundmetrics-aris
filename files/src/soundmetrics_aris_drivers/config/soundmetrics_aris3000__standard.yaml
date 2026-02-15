@@ -1,8 +1,8 @@
 use_64_bit_os: True
 local_network_interface_name: "enp4s0"
 frame_id: "aris3000"
-local_ip: "169.254.7.10"
-sender_ip: "169.254.7.147"
+host_ip: "169.254.7.10"
+sonar_ip: "169.254.7.147"
 frame_period_sec: 0.2
 gain: 24
 frequency: 1
