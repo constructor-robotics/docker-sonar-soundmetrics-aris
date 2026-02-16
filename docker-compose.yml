@@ -1,7 +1,7 @@
 version: '3.8'
 
 services:
-  ros1-sensor-sonar-aris:
+  ros2-sensor-sonar-aris:
     build:
       context: .
       dockerfile: Dockerfile

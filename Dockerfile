@@ -1,8 +1,8 @@
-FROM ros:noetic-perception
+FROM ros:jazzy-perception
 LABEL maintainer="agomezchav@constructor.university"
 
-ARG workspace=catkin_ws
-ARG rosversion=melodic
+ARG workspace=ros2ws
+ARG rosversion=jazzy
 
 ENV WORKSPACE=${workspace}
 ENV ROSVERSION=${rosversion}
@@ -21,16 +21,14 @@ RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -q -y --no-
 RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get upgrade -q -y \
    && rm -rf /var/lib/apt/lists/*
 
-# Create initial workspace 
+# Create initial workspace
 RUN mkdir -p /home/${WORKSPACE}/src
-RUN /bin/bash -c ". /opt/ros/${ROSVERSION}/setup.bash; catkin_init_workspace /home/${WORKSPACE}/src"  
-RUN /bin/bash -c ". /opt/ros/${ROSVERSION}/setup.bash; cd /home/${WORKSPACE}; catkin_make"
 
 # Source ROS and workspace in every bash session
 RUN echo "source /opt/ros/${ROSVERSION}/setup.bash" >> /root/.bashrc && \
-    echo "source /home/${WORKSPACE}/devel/setup.bash" >> /root/.bashrc
+    echo "if [ -f /home/${WORKSPACE}/install/setup.bash ]; then source /home/${WORKSPACE}/install/setup.bash; fi" >> /root/.bashrc
 
-# Entrypoint runs catkin_make on container startup
+# Entrypoint runs colcon build on container startup
 COPY entrypoint.sh /entrypoint.sh
 ENTRYPOINT ["/entrypoint.sh"]
 CMD ["/bin/bash"]
