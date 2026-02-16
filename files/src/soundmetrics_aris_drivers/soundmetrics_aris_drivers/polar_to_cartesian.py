@@ -117,6 +117,11 @@ class PolarToCartesianConverter(Node):
         # Output image dimensions
         cart_width = int(2 * rmax * math.sin(half_fov_rad) * pixels_per_meter)
         cart_height = int(rmax * pixels_per_meter)
+        
+        # Note: cart_height spans from range=0 (sonar origin) to rmax, but sonar
+        # data only exists from rmin to rmax. The bottom portion (0 to rmin) is
+        # black. This preserves correct fan-arc geometry with the origin at the
+        # bottom center of the image.
 
         # Force odd for symmetry
         if cart_width % 2 == 0:
