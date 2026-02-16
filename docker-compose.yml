@@ -8,7 +8,7 @@ services:
       args:
         - workspace=${workspace}
         - rosversion=${rosversion}
-    image: sonar-ros:dev
+    image: soundmetrics-aris-sonar:ros2
 
     container_name: ${container_name}
     hostname: ${hostname}

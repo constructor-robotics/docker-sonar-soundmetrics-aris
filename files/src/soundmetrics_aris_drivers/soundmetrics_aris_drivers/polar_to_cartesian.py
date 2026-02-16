@@ -23,21 +23,23 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 """
 
-import rospy
+import rclpy
+from rclpy.node import Node
 import cv2
 import numpy as np
 import math
 import message_filters
 from sensor_msgs.msg import Image
-from soundmetrics_aris_drivers.msg import SonarInfo
+from soundmetrics_aris_interfaces.msg import SonarInfo
 from cv_bridge import CvBridge, CvBridgeError
 
 
-class PolarToCartesianConverter(object):
+class PolarToCartesianConverter(Node):
     """Converts polar sonar images to fan-shaped cartesian representation."""
 
-    def __init__(self, name):
-        self.name = name
+    def __init__(self):
+        super().__init__('polar_to_cartesian')
+        self.name = self.get_name()
 
         # CvBridge for image conversion
         self.bridge = CvBridge()
@@ -56,12 +58,14 @@ class PolarToCartesianConverter(object):
 
         # Subscribers using message_filters for time synchronization
         polar_sub = message_filters.Subscriber(
-            'image/polar/raw',
-            Image
+            self,
+            Image,
+            'image/polar/raw'
         )
         info_sub = message_filters.Subscriber(
-            'sonar_info',
-            SonarInfo
+            self,
+            SonarInfo,
+            'sonar_info'
         )
 
         ts = message_filters.ApproximateTimeSynchronizer(
@@ -71,19 +75,19 @@ class PolarToCartesianConverter(object):
         )
         ts.registerCallback(self.sync_callback)
 
+        # Keep references to prevent garbage collection
+        self._polar_sub = polar_sub
+        self._info_sub = info_sub
+        self._ts = ts
+
         # Publisher
-        self.cartesian_pub = rospy.Publisher(
-            'image/cartesian_fan/raw',
+        self.cartesian_pub = self.create_publisher(
             Image,
-            queue_size=2
+            'image/cartesian_fan/raw',
+            2
         )
 
-        rospy.loginfo('%s: Polar-to-Cartesian converter initialized', self.name)
-        rospy.loginfo('%s: Subscribing to %s and %s', self.name,
-                      rospy.resolve_name('image/polar/raw'),
-                      rospy.resolve_name('sonar_info'))
-        rospy.loginfo('%s: Publishing to %s', self.name,
-                      rospy.resolve_name('image/cartesian_fan/raw'))
+        self.get_logger().info('%s: Polar-to-Cartesian converter initialized' % self.name)
 
     def needs_remapping(self, sonar_info):
         """Check if the mapping needs to be recomputed."""
@@ -158,8 +162,8 @@ class PolarToCartesianConverter(object):
         self.rmax = rmax
         self.half_fov_deg = half_fov_deg
 
-        rospy.loginfo('%s: Mapping computed - cartesian image size: %dx%d',
-                      self.name, cart_width, cart_height)
+        self.get_logger().info('%s: Mapping computed - cartesian image size: %dx%d' %
+                      (self.name, cart_width, cart_height))
 
     def apply_mapping(self, polar_image):
         """Apply the cached mapping to convert a polar image to cartesian."""
@@ -254,7 +258,7 @@ class PolarToCartesianConverter(object):
 
             # Recompute mapping if sonar parameters changed
             if self.needs_remapping(sonar_info):
-                rospy.loginfo('%s: Sonar parameters changed, recomputing mapping', self.name)
+                self.get_logger().info('%s: Sonar parameters changed, recomputing mapping' % self.name)
                 rmin = sonar_info.window_start
                 rmax = sonar_info.window_start + sonar_info.window_length
                 self.compute_mapping(
@@ -276,15 +280,22 @@ class PolarToCartesianConverter(object):
             self.cartesian_pub.publish(cart_msg)
 
         except CvBridgeError as e:
-            rospy.logwarn('%s: CvBridge error: %s', self.name, e)
+            self.get_logger().warn('%s: CvBridge error: %s' % (self.name, e))
         except Exception as e:
-            rospy.logerr('%s: Error in conversion: %s', self.name, e)
+            self.get_logger().error('%s: Error in conversion: %s' % (self.name, e))
+
+
+def main(args=None):
+    rclpy.init(args=args)
+    try:
+        node = PolarToCartesianConverter()
+        rclpy.spin(node)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        if rclpy.ok():
+            rclpy.shutdown()
 
 
 if __name__ == '__main__':
-    try:
-        rospy.init_node('polar_to_cartesian')
-        converter = PolarToCartesianConverter(rospy.get_name())
-        rospy.spin()
-    except rospy.ROSInterruptException:
-        pass
+    main()

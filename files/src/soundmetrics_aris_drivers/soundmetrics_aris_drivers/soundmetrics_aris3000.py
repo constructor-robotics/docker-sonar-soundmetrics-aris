@@ -23,17 +23,19 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 """
 
-import rospy
-from cv_bridge import CvBridge,CvBridgeError
+import rclpy
+from rclpy.node import Node
+from cv_bridge import CvBridge, CvBridgeError
 from sensor_msgs.msg import Image
 
-from soundmetrics_aris_drivers.msg import SonarInfo
-from soundmetrics_aris_drivers.srv import SetSonarParams, SetSonarParamsResponse
+from soundmetrics_aris_interfaces.msg import SonarInfo
+from soundmetrics_aris_interfaces.srv import SetSonarParams
 
 import cv2
 import socket
 import struct
 import threading
+import time
 import numpy as np
 import subprocess
 import sys
@@ -102,13 +104,14 @@ CYCLE_PERIOD_MIN = 1802
 CYCLE_PERIOD_MAX = 60000                        #Documentation says 150000, need to check
 
 
-class SonarSoundMetricsAris3000(object) :
+class SonarSoundMetricsAris3000(Node):
     """ This class configures and receive images from Sound Metrics
         ARIS3000 forward looking sonar. """
 
-    def __init__(self, name):
+    def __init__(self):
         """ Soundmetrics ARIS 3000 driver """
-        self.name = name
+        super().__init__('soundmetrics_aris3000')
+        self.name = self.get_name()
         self.local_network_interface_name = ""
 
         #debug images
@@ -142,7 +145,6 @@ class SonarSoundMetricsAris3000(object) :
         self.bundle_size = 0
         self.iysize = 0
         self.pitch_vehicle = 0.0
-        #self.odometry = Odometry()
         self.compass_pitch = 0.0
 
         self.altitude = 1.0
@@ -153,48 +155,19 @@ class SonarSoundMetricsAris3000(object) :
 
         ### Check whether network interface is available
         if self.getNetworkInterface(self.local_network_interface_name) == -1:
-            rospy.logfatal('Required local network interface %s not found!', self.local_network_interface_name)
+            self.get_logger().fatal('Required local network interface %s not found!' % self.local_network_interface_name)
             sys.exit(1)
-
-        ### NOTE: This line in case IP is extracted automatically - to be tested
-        # self.local_IP = subprocess.getoutput("/sbin/ifconfig").split("\n")[self.getNetworkInterface(self.local_network_interface_name)+1].split()[1][5:]
-
-        ### NOTE: The following block extracts the sensor IP by parsing a UDP package
-        ### Needs to be tested for reliabilty, it sometimes gives 0 at boot
-
-        # # Connect to UDP socket at port 56123
-        # udp = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        # udp.bind(('', 56123))
-
-        # header = udp.recv(68)
-        # rospy.loginfo('%s: Read header from UDP:56123', self.name)
-        # udp.close()
-
-        # header_fmt = list(struct.unpack('< 17I', header))
-        # rospy.loginfo('%s: Received header at UDP:56123\n %s',
-        #             self.name, header_fmt)
-
-        # # Save sender IP
-        # self.sender_IP = header_fmt[6]
-        # byte_1 = self.sender_IP >> 24
-        # byte_2 = (self.sender_IP - byte_1*(2**24)) >> 16
-        # byte_3 = (self.sender_IP - byte_1*(2**24) - byte_2*(2**16)) >> 8
-        # byte_4 = (self.sender_IP - byte_1*(2**24) - byte_2*(2**16) - byte_3*(2**8))
-        # self.sender_IP_text = (str(byte_1) + '.' + str(byte_2) + '.' +
-        #                     str(byte_3) + '.' + str(byte_4))
-
-        ### ------------------------------------------------------------------------------  
 
         # Use IPs from config
         self.local_IP = self.host_ip
         ip = self.local_IP.split('.')
         self.local_IP_dec = (int(ip[0]) << 24) + (int(ip[1]) << 16) + (int(ip[2]) << 8) + int(ip[3])
-        rospy.loginfo('%s: Local ip: %s', self.name, self.local_IP)
+        self.get_logger().info('%s: Local ip: %s' % (self.name, self.local_IP))
 
         self.sender_IP_text = self.sonar_ip
         parts = self.sender_IP_text.split('.')
         self.sender_IP = (int(parts[0]) << 24) + (int(parts[1]) << 16) + (int(parts[2]) << 8) + int(parts[3])
-        rospy.loginfo('%s: Sender ip: %s', self.name, self.sender_IP_text)
+        self.get_logger().info('%s: Sender ip: %s' % (self.name, self.sender_IP_text))
 
         # Create TCP socket at localhost:56888
         try:
@@ -202,7 +175,7 @@ class SonarSoundMetricsAris3000(object) :
             self.tcp.connect((self.sender_IP_text, TCP_COMMAND_PORT))
             self.tcp.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
         except socket.error as e:
-            rospy.logfatal('%s: Failed to create TCP connection to %s:%d - %s', self.name, self.sender_IP_text, TCP_COMMAND_PORT, e)
+            self.get_logger().fatal('%s: Failed to create TCP connection to %s:%d - %s' % (self.name, self.sender_IP_text, TCP_COMMAND_PORT, e))
             raise
 
         # Send inital configuration
@@ -216,19 +189,19 @@ class SonarSoundMetricsAris3000(object) :
         # Open data receive port
         self.udp_data = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.udp_data.bind(('', UDP_DATA_PORT))
-        rospy.loginfo('%s: UDP DATA @ %d connected!', self.name, UDP_DATA_PORT)
+        self.get_logger().info('%s: UDP DATA @ %d connected!' % (self.name, UDP_DATA_PORT))
 
         ### Create ROS Publishers and Services
         # Create publishers
         # The image below is the polar fan image, where x-axis is the range bins (samples per beam) and y-axis is beam angle (index)
-        self.polar_pub = rospy.Publisher('image/polar/raw', Image, queue_size = 2)
-        self.sonar_info_pub = rospy.Publisher('sonar_info', SonarInfo, queue_size = 2)
+        self.polar_pub = self.create_publisher(Image, 'image/polar/raw', 2)
+        self.sonar_info_pub = self.create_publisher(SonarInfo, 'sonar_info', 2)
 
         ## Create Service -- to be tested
-        #self.load_configuration_srv = rospy.Service('configuration', SetSonarParams, self.set_configuration)
-        
+        #self.load_configuration_srv = self.create_service(SetSonarParams, 'configuration', self.set_configuration)
+
         self.bridge = CvBridge()
-        rospy.loginfo('%s: Finish creating ROS Publishers and Services', self.name)
+        self.get_logger().info('%s: Finish creating ROS Publishers and Services' % self.name)
 
 
     @staticmethod
@@ -240,7 +213,7 @@ class SonarSoundMetricsAris3000(object) :
             if local_network_interface_name in splits[i_line]:
                 found_line = i_line
         return found_line
-    
+
     @staticmethod
     def compute_checksum(header_fmt):
         """ Compute the checksum for an ARIS3000 command header """
@@ -268,28 +241,44 @@ class SonarSoundMetricsAris3000(object) :
         elif mode == 9:
             return [9, 128, 8, True]
         else:
-            rospy.logfatal('Invalid mode!')
             return [9, 128, 8, False]
-    
+
     def get_config(self):
         """ Read configurations from ROS PARAM SERVER """
-        
-        self.use_64_bit_os = rospy.get_param('~use_64_bit_os', True)
-        self.local_network_interface_name = rospy.get_param('~local_network_interface_name', "")
-        self.frame_id = rospy.get_param('~frame_id', "aris3000")
-        self.frame_period_sec = rospy.get_param('~frame_period_sec', 1.0)
-        self.gain = rospy.get_param('~gain', 24)
-        self.frequency = rospy.get_param('~frequency', 1)
-        self.focus = rospy.get_param('~focus', 364)
-        self.pulse_width = rospy.get_param('~pulse_width', 8)
-        self.ping_mode = rospy.get_param('~ping_mode', 9)
-        self.samples_per_beam = rospy.get_param('~samples_per_beam', 512)
-        self.window_start = rospy.get_param('~window_start', 0.7)
-        self.window_length = rospy.get_param('~window_length', 3.5)
-        self.ixsize = rospy.get_param('~cartesian_width', 350)
-        self.sound_velocity = rospy.get_param('~sound_velocity', 1500.0)
-        self.host_ip = rospy.get_param('~host_ip', "169.254.7.10")
-        self.sonar_ip = rospy.get_param('~sonar_ip', "169.254.7.147")
+
+        self.declare_parameter('use_64_bit_os', True)
+        self.declare_parameter('local_network_interface_name', "")
+        self.declare_parameter('frame_id', "aris3000")
+        self.declare_parameter('frame_period_sec', 1.0)
+        self.declare_parameter('gain', 24)
+        self.declare_parameter('frequency', 1)
+        self.declare_parameter('focus', 364)
+        self.declare_parameter('pulse_width', 8)
+        self.declare_parameter('ping_mode', 9)
+        self.declare_parameter('samples_per_beam', 512)
+        self.declare_parameter('window_start', 0.7)
+        self.declare_parameter('window_length', 3.5)
+        self.declare_parameter('cartesian_width', 350)
+        self.declare_parameter('sound_velocity', 1500.0)
+        self.declare_parameter('host_ip', "169.254.7.10")
+        self.declare_parameter('sonar_ip', "169.254.7.147")
+
+        self.use_64_bit_os = self.get_parameter('use_64_bit_os').value
+        self.local_network_interface_name = self.get_parameter('local_network_interface_name').value
+        self.frame_id = self.get_parameter('frame_id').value
+        self.frame_period_sec = self.get_parameter('frame_period_sec').value
+        self.gain = self.get_parameter('gain').value
+        self.frequency = self.get_parameter('frequency').value
+        self.focus = self.get_parameter('focus').value
+        self.pulse_width = self.get_parameter('pulse_width').value
+        self.ping_mode = self.get_parameter('ping_mode').value
+        self.samples_per_beam = self.get_parameter('samples_per_beam').value
+        self.window_start = self.get_parameter('window_start').value
+        self.window_length = self.get_parameter('window_length').value
+        self.ixsize = self.get_parameter('cartesian_width').value
+        self.sound_velocity = self.get_parameter('sound_velocity').value
+        self.host_ip = self.get_parameter('host_ip').value
+        self.sonar_ip = self.get_parameter('sonar_ip').value
 
         [self.mode, self.beams, self.pings, success] = self.get_beams_and_pings(self.ping_mode)
         # Repack the float values as an unsigned 32-bit integer representing a binary value
@@ -297,49 +286,44 @@ class SonarSoundMetricsAris3000(object) :
 
     def send_ping(self):
         """ Send a ping command to keep sensor connection alive """
-        while True:
+        while rclpy.ok():
             # Send ping
             cmd = self.create_command(PING, [0, 0, 0, 0, 0, 0])
             self.send_command(cmd)
-            rospy.sleep(PING_INTERVAL_SEC)
+            time.sleep(PING_INTERVAL_SEC)
 
 
-    def set_configuration(self, req):
+    def set_configuration(self, request, response):
         """ Service to change Sonar configuration """
         self.lock.acquire()
-        #self.debug = req.debug
-        #self.use_64_bit_os = req.use_64_bit_os 
-        #self.local_network_interface_name = req.local_network_interface_name
-        #self.publisher_topic = req.publisher_topic
-        self.frame_period_sec = req.frame_period_sec
+        self.frame_period_sec = request.frame_period_sec
 
         # Set receiver gain
-        self.gain = max(GAIN_MIN, min(req.gain, GAIN_MAX))
-        self.gain_binary = struct.unpack('I', struct.pack('f', req.gain))[0]
+        self.gain = max(GAIN_MIN, min(request.gain, GAIN_MAX))
+        self.gain_binary = struct.unpack('I', struct.pack('f', request.gain))[0]
 
-        if req.frequency_hi:
+        if request.frequency_hi:
             self.frequency = 1
         else:
             self.frequency = 0
-        self.focus = req.focus
-        self.pulse_width = req.pulse_width
-        self.window_start = req.window_start
-        self.window_length = req.window_length
-        self.samples_per_beam = req.samples_per_beam
-	
+        self.focus = request.focus
+        self.pulse_width = request.pulse_width
+        self.window_start = request.window_start
+        self.window_length = request.window_length
+        self.samples_per_beam = request.samples_per_beam
+
         # Send new configuration
         self.send_config()
         self.lock.release()
-        ret = SetSonarParamsResponse()
-        ret.attempted = True
-        return ret
+        response.attempted = True
+        return response
 
 
     def send_config(self):
         """ Send configuration to ARIS3000 """
         self.lock.acquire()
         self.need_sync = True
-        rospy.loginfo('%s: Config sonar', self.name)
+        self.get_logger().info('%s: Config sonar' % self.name)
 
         # Set sonar frame rate
         self.frame_period_sec = max(FRAME_PERIOD_SEC_MIN, min(self.frame_period_sec, FRAME_PERIOD_SEC_MAX))
@@ -386,11 +370,11 @@ class SonarSoundMetricsAris3000(object) :
                         self.samples_per_beam * sample_period + CYCLE_PERIOD_OVERHEAD_USEC)
         cycle_period = max(CYCLE_PERIOD_MIN, min(cycle_period, CYCLE_PERIOD_MAX))
 
-        rospy.loginfo('window_length: %f', self.window_length)
-        rospy.loginfo('samples_per_beam: %f', self.samples_per_beam)
-        rospy.loginfo('sound_velocity: %f', self.sound_velocity)
-        rospy.loginfo('sample period: %f', sample_period)
-        rospy.loginfo('cycle period: %f', cycle_period)
+        self.get_logger().info('window_length: %f' % self.window_length)
+        self.get_logger().info('samples_per_beam: %f' % self.samples_per_beam)
+        self.get_logger().info('sound_velocity: %f' % self.sound_velocity)
+        self.get_logger().info('sample period: %f' % sample_period)
+        self.get_logger().info('cycle period: %f' % cycle_period)
 
         cmd = self.create_command(P2_SET_SONAR_PARAMS,
                                  [self.ping_mode, sample_start_delay,
@@ -427,9 +411,6 @@ class SonarSoundMetricsAris3000(object) :
         header_fmt[10] = self.nt            # transaction number
         header_fmt[11:] = [int(x) for x in params]
 
-        # print("===================================")
-        # print(header_fmt)
-
         for i, val in enumerate(header_fmt):
             if not isinstance(val, int):
                 raise TypeError(f"header_fmt[{i}] = {val} is not an int")
@@ -445,38 +426,36 @@ class SonarSoundMetricsAris3000(object) :
         for i in range(2):
             self.tcp.send(cmd)
 
-        # time.sleep(0.01)
-
 
     def read_sonar_image(self):
         """ Read ARIS3000 acoustic images """
         self.lock.acquire()
 
         if self.need_sync:
-            rospy.loginfo('%s: Wait image sync', self.name)
+            self.get_logger().info('%s: Wait image sync' % self.name)
             self.udp_data.settimeout(5.0)
             # Sync with first bundle
             while self.need_sync:
                 try:
                     header = self.udp_data.recv(68)
                 except socket.timeout:
-                    rospy.logwarn('%s: No UDP data received on port %d within 5s, retrying...', self.name, UDP_DATA_PORT)
+                    self.get_logger().warn('%s: No UDP data received on port %d within 5s, retrying...' % (self.name, UDP_DATA_PORT))
                     continue
                 header_fmt = list(struct.unpack('< 17I', header))
-                rospy.logdebug('%s: Sync packet - body_size=%d, packet_num=%d, total_packets=%d',
-                               self.name, header_fmt[5], header_fmt[11], header_fmt[12])
+                self.get_logger().debug('%s: Sync packet - body_size=%d, packet_num=%d, total_packets=%d' %
+                               (self.name, header_fmt[5], header_fmt[11], header_fmt[12]))
 
                 # check if there is data in the body and the number of
                 # transaction is the last one of the frame
                 if header_fmt[5] > 0 and header_fmt[12]-1 == header_fmt[11]:
                     self.bundle_size = header_fmt[12]
-                    rospy.loginfo('%s: Synced - bundle_size=%d', self.name, self.bundle_size)
+                    self.get_logger().info('%s: Synced - bundle_size=%d' % (self.name, self.bundle_size))
                     self.need_sync = False
                     self.udp_data.settimeout(None)
-                    rospy.loginfo('%s: Reading data', self.name)
+                    self.get_logger().info('%s: Reading data' % self.name)
 
         # Read sonar image
-        # ARIS sample data is stored as “one unsigned byte per sample” with valid values 0-255
+        # ARIS sample data is stored as "one unsigned byte per sample" with valid values 0-255
         img = []
         for i in range(self.bundle_size):
             data = self.udp_data.recv(HEADER_SIZE_BYTES + PAYLOAD_SIZE_BYTES)
@@ -493,13 +472,12 @@ class SonarSoundMetricsAris3000(object) :
 
         try:
             cv_ordered_image_bgr = cv2.cvtColor(ordered_image,  cv2.COLOR_GRAY2BGR)
-            #polar_img_msg = self.bridge.cv2_to_imgmsg(cv_ordered_image_bgr, encoding="bgr8")	
             polar_img_msg = self.bridge.cv2_to_imgmsg(ordered_image, "mono8")
-            polar_img_msg.header.stamp = rospy.Time().now()
+            polar_img_msg.header.stamp = self.get_clock().now().to_msg()
             polar_img_msg.header.frame_id = self.frame_id
             self.polar_pub.publish(polar_img_msg)
         except CvBridgeError as e:
-            rospy.logwarn('CvBridgeError: %s', e)
+            self.get_logger().warn('CvBridgeError: %s' % e)
 
         sonar_info.header.stamp = polar_img_msg.header.stamp
         self.sonar_info_pub.publish(sonar_info)
@@ -548,31 +526,19 @@ class SonarSoundMetricsAris3000(object) :
     def read_frame_header(self, frameheader):
         """ Parses ARIS 3000 header into sonar_info msg """
 
-        # frameheader_bytes = str(frameheader) ### Python 2
         frameheader_bytes = frameheader ### Python 3
         # TODO: We have added 4 extra chars to work on 64bits machine!
-
-        # # Ensure you're working with bytes
-        # if self.use_64_bit_os:
-        #     format_prefix = '<'  # Use little-endian, adjust if needed
-        #     format_string = format_prefix + 'Q' + 'IQIIQIIIIIIffIiIIIIIIffffffffffffffffffffddfIfffIIIIfIfffffffffdfIIIfffIIIIIIIffffff16fffffIIIIIIffIIIIIIQIIIIIIf124I'
-        # else:
-        #     format_prefix = '<'
-        #     format_string = format_prefix + 'IQIIQIIIIIIffIiIIIIIIffffffffffffffffffffddfIfffIIIIfIfffffffffdfIIIfffIIIIIIIffffff16fffffIIIIIIffIIIIIIQIIIIIIf124I'
-
 
         offset_64_bit_os = ''
         if self.use_64_bit_os:
             offset_64_bit_os = b'\x00\x00\x00\x00'
-            #offset_64_bit_os = '0000'
-		
-        # frame_header_fields = struct.unpack(format_string, frameheader_bytes)
+
         frame_header_fields = struct.unpack('IQIIQIIIIIIffIiIIIIIIffffffffffffffffffffddfIfffIIIIfIfffffffffdfIIIfffIIIIIIIffffff16fffffIIIIIIffIIIIIIQIIIIIIf124I',
                                             offset_64_bit_os + frameheader_bytes)
-        
+
 
         sonar_info = SonarInfo()
-        sonar_info.header.stamp = rospy.Time().now()
+        sonar_info.header.stamp = self.get_clock().now().to_msg()
         sonar_info.header.frame_id = self.frame_id
         sonar_info.index = frame_header_fields[0]
         sonar_info.time = frame_header_fields[1]
@@ -599,86 +565,38 @@ class SonarSoundMetricsAris3000(object) :
         sonar_info.sound_speed = frame_header_fields[111] # NOTE: Need to check if this varies in open-water, so far gives zero
         sonar_info.samples_per_beam = frame_header_fields[112]
         sonar_info.salinity = frame_header_fields[124]
-        
+
         [res, sonar_info.beams, sonar_info.pings_per_frame, success] = self.get_beams_and_pings(sonar_info.ping_mode)
         sonar_info.half_field_of_view = HALF_FIELD_OF_VIEW
         if not success:
             self.need_sync = True
-            rospy.logwarn("Invalid sonar ping mode, %d", sonar_info.ping_mode)
-            rospy.logwarn("Synchronization needed ...")
+            self.get_logger().warn("Invalid sonar ping mode, %d" % sonar_info.ping_mode)
+            self.get_logger().warn("Synchronization needed ...")
 
 
         return sonar_info
 
 
+def main(args=None):
+    rclpy.init(args=args)
+    node = SonarSoundMetricsAris3000()
+
+    # Spin in a background thread so ROS2 callbacks (services, parameters) are processed
+    # while the main thread blocks on UDP socket reads in read_sonar_image()
+    spin_thread = threading.Thread(target=rclpy.spin, args=(node,), daemon=True)
+    spin_thread.start()
+
+    try:
+        while rclpy.ok():
+            node.read_sonar_image()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        node.destroy_node()
+        if rclpy.ok():
+            rclpy.shutdown()
+        spin_thread.join()
+
 
 if __name__ == '__main__':
-    try:
-        rospy.init_node('soundmetrics_aris3000')
-        soundmetrics_aris3000 = SonarSoundMetricsAris3000(rospy.get_name())
-        while not rospy.is_shutdown():
-            pass
-            soundmetrics_aris3000.read_sonar_image()
-    except rospy.ROSInterruptException:
-        pass
-
-
-
-
-# def map_scan(self, rmax, rmin):
-#         """ Computes cartesian image height as well as a map vector
-#             to transform a polar image into a cartesian one. """
-
-
-#         # precalcualtion of constants used in do loop below
-#         # (bottom of image frame to r,theta origin in meters)
-#         d3 = rmin * math.cos(math.radians(HALF_FIELD_OF_VIEW))
-
-#         # samples/m
-#         c1 = (self.samples_per_beam)/(rmax-rmin)
-
-#         # beams/deg
-#         c2 = (self.beams)/(2 * HALF_FIELD_OF_VIEW)
-
-#         # Ratio pixel/meters will depend on number of samples
-#         gamma = self.samples_per_beam/(rmax-rmin)
-#         #gamma= self.ixsize/(2 * rmax * math.sin(math.radians(HALF_FIELD_OF_VIEW)))
-
-#         # number of pixels in image in vertical direction (forced to odd)
-#         iysize = math.floor( gamma * (rmax - d3) )
-#         if not iysize%2:
-#             iysize = iysize-1
-
-#         # number of pixels in image in vertical direction (forced to odd)
-#         ixsize =  math.floor(gamma * (2 * rmax * math.sin(math.radians(HALF_FIELD_OF_VIEW))))
-#         if not ixsize%2:
-#             ixsize = ixsize-1
-
-#         # make vector and fill in later
-#         svector = np.zeros(ixsize * iysize)
-#         # pixels in x dimension
-#         ix = np.arange(ixsize)
-#         # convert from pixels to meters
-#         x = ((ix) - ixsize/2 + 0.5)/gamma #0.5 so that the vector is symmetric
-
-#         for iy in np.arange(iysize):
-#             # convert from pixels to meters
-#             y = rmax - (iy)/gamma
-#             # convert to polar cooridinates
-#             r = np.sqrt(y*y + x*x)
-#             # theta is in degrees
-#             theta = np.degrees(np.arctan2(x, y))
-#             # the rangebin number
-#             binnum = np.floor((r - rmin) * c1 )
-#             # the linear function to get beam number
-#             beamnum = np.floor((theta + HALF_FIELD_OF_VIEW) * c2 )
-#             #find position in sample array expressed as a vector
-#             #make pos = 0 if outside sector, else give it the offset in the sample array
-#             pos = (beamnum >= 0)*(beamnum < self.beams)*(binnum >= 0)*(binnum < self.samples_per_beam)*((beamnum-1)*self.samples_per_beam + binnum)
-#             indvec = (ix)*iysize + iy
-#             # The offset in this array is the pixel offset in the image array
-#             # The value at this offset is the offset in the sample array
-#             svector[np.ix_(indvec.astype(int))] = pos.copy()
-
-#         mapvector = svector
-#         return mapvector, int(iysize), int(ixsize)
+    main()

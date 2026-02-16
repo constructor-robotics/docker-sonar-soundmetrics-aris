@@ -1,4 +1,4 @@
-Header header
+std_msgs/Header header
 uint32 index
 uint64 time
 string version
@@ -26,4 +26,3 @@ uint32 beams
 uint32 pings_per_frame
 float32 half_field_of_view
 uint32 salinity
-
