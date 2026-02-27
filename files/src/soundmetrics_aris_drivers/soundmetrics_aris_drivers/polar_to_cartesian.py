@@ -194,16 +194,15 @@ class PolarToCartesianConverter(Node):
         return cartesian_image
 
     def _prerender_grid(self, padding=40):
-        """Pre-render the grid overlay onto a blank image. Called once per parameter change."""
+        """Pre-render the grid overlay onto a blank mono8 image. Called once per parameter change."""
         h = self.cart_height + 2 * padding
         w = self.cart_width + 2 * padding
-        overlay = np.zeros((h, w, 3), dtype=np.uint8)
+        overlay = np.zeros((h, w), dtype=np.uint8)
 
         origin_x = padding + self.cart_width // 2
         origin_y = padding + self.cart_height
 
-        grid_color = (0, 200, 0)
-        text_color = (0, 255, 0)
+        color = 255
         font = cv2.FONT_HERSHEY_SIMPLEX
         font_scale = max(0.3, self.cart_height / 1500.0)
 
@@ -223,12 +222,12 @@ class PolarToCartesianConverter(Node):
                 start_angle = 270 - self.half_fov_deg
                 end_angle = 270 + self.half_fov_deg
                 cv2.ellipse(overlay, (origin_x, origin_y), (radius_px, radius_px),
-                            0, start_angle, end_angle, grid_color, 1)
+                            0, start_angle, end_angle, color, 1)
                 label_angle_rad = math.radians(self.half_fov_deg)
                 label_x = int(origin_x + r * math.sin(label_angle_rad) * self.pixels_per_meter)
                 label_y = int(origin_y - r * math.cos(label_angle_rad) * self.pixels_per_meter)
                 cv2.putText(overlay, '%.1fm' % r, (label_x + 3, label_y),
-                            font, font_scale, text_color, 1, cv2.LINE_AA)
+                            font, font_scale, color, 1, cv2.LINE_AA)
             r += ring_step
 
         # --- Angle lines ---
@@ -240,22 +239,21 @@ class PolarToCartesianConverter(Node):
             y1 = int(origin_y - self.rmin * math.cos(angle_rad) * self.pixels_per_meter)
             x2 = int(origin_x + self.rmax * math.sin(angle_rad) * self.pixels_per_meter)
             y2 = int(origin_y - self.rmax * math.cos(angle_rad) * self.pixels_per_meter)
-            cv2.line(overlay, (x1, y1), (x2, y2), grid_color, 1)
+            cv2.line(overlay, (x1, y1), (x2, y2), color, 1)
             if angle != 0:
                 cv2.putText(overlay, '%ddeg' % int(angle), (x2 + 3, y2 - 3),
-                            font, font_scale, text_color, 1, cv2.LINE_AA)
+                            font, font_scale, color, 1, cv2.LINE_AA)
             angle += angle_step
 
         self.cached_grid_overlay = overlay
-        self.cached_grid_mask = overlay.any(axis=2)
+        self.cached_grid_mask = overlay > 0
 
     def draw_grid_overlay(self, image, padding=40):
         """Stamp the pre-rendered grid onto the image. No drawing happens here."""
-        bgr = cv2.cvtColor(image, cv2.COLOR_GRAY2BGR)
-        bgr = cv2.copyMakeBorder(bgr, padding, padding, padding, padding,
-                                 cv2.BORDER_CONSTANT, value=(0, 0, 0))
-        bgr[self.cached_grid_mask] = self.cached_grid_overlay[self.cached_grid_mask]
-        return bgr
+        mono = cv2.copyMakeBorder(image, padding, padding, padding, padding,
+                                  cv2.BORDER_CONSTANT, value=0)
+        mono[self.cached_grid_mask] = self.cached_grid_overlay[self.cached_grid_mask]
+        return mono
 
     def _count(self, topic):
         if topic == 'polar':
@@ -295,12 +293,12 @@ class PolarToCartesianConverter(Node):
             cartesian_cv = self.apply_mapping(polar_cv)
             t2 = time.perf_counter()
 
-            # Draw grid overlay (converts to BGR)
-            cartesian_bgr = self.draw_grid_overlay(cartesian_cv)
+            # Draw grid overlay
+            cartesian_mono = self.draw_grid_overlay(cartesian_cv)
             t3 = time.perf_counter()
 
             # Publish with same header (timestamp + frame_id)
-            cart_msg = self.bridge.cv2_to_imgmsg(cartesian_bgr, encoding='bgr8')
+            cart_msg = self.bridge.cv2_to_imgmsg(cartesian_mono, encoding='mono8')
             cart_msg.header = polar_msg.header
             self.cartesian_pub.publish(cart_msg)
             t4 = time.perf_counter()
