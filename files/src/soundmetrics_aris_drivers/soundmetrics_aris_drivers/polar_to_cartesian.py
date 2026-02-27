@@ -28,6 +28,7 @@ from rclpy.node import Node
 import cv2
 import numpy as np
 import math
+import time
 import message_filters
 from sensor_msgs.msg import Image
 from soundmetrics_aris_interfaces.msg import SonarInfo
@@ -250,7 +251,9 @@ class PolarToCartesianConverter(Node):
     def sync_callback(self, polar_msg, sonar_info):
         """Handle synchronized polar image and sonar info messages."""
         try:
+            t0 = time.perf_counter()
             polar_cv = self.bridge.imgmsg_to_cv2(polar_msg, desired_encoding='mono8')
+            t1 = time.perf_counter()
 
             # Recompute mapping if sonar parameters changed
             if self.needs_remapping(sonar_info):
@@ -266,14 +269,21 @@ class PolarToCartesianConverter(Node):
 
             # Apply mapping
             cartesian_cv = self.apply_mapping(polar_cv)
+            t2 = time.perf_counter()
 
             # Draw grid overlay (converts to BGR)
             cartesian_bgr = self.draw_grid_overlay(cartesian_cv)
+            t3 = time.perf_counter()
 
             # Publish with same header (timestamp + frame_id)
             cart_msg = self.bridge.cv2_to_imgmsg(cartesian_bgr, encoding='bgr8')
             cart_msg.header = polar_msg.header
             self.cartesian_pub.publish(cart_msg)
+            t4 = time.perf_counter()
+
+            self.get_logger().info(
+                '%s: imgmsg_to_cv2=%.1fms  apply_mapping=%.1fms  draw_grid=%.1fms  publish=%.1fms  total=%.1fms' % (
+                self.name, (t1-t0)*1000, (t2-t1)*1000, (t3-t2)*1000, (t4-t3)*1000, (t4-t0)*1000))
 
         except CvBridgeError as e:
             self.get_logger().warn('%s: CvBridge error: %s' % (self.name, e))
