@@ -20,10 +20,12 @@ services:
       - QT_X11_NO_MITSHM=1
       - XDG_RUNTIME_DIR=/tmp/runtime-root
       - LIBGL_ALWAYS_SOFTWARE=1
+      - FASTDDS_DEFAULT_PROFILES_FILE=${FASTDDS_DEFAULT_PROFILES_FILE}
     volumes:
     # In newest versions of linux distributions, the display server uses Wayland instead of X11
       - /tmp/.X11-unix:/tmp/.X11-unix:rw
       - ./files/src:/home/${workspace}/src
+      - ./fastdds_profile.xml:/fastdds_profile.xml:ro
     stdin_open: true
     tty: true
     command: bash
