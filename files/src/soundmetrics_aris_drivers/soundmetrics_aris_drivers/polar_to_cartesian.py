@@ -281,9 +281,11 @@ class PolarToCartesianConverter(Node):
             self.cartesian_pub.publish(cart_msg)
             t4 = time.perf_counter()
 
+            dt = abs((polar_msg.header.stamp.sec - sonar_info.header.stamp.sec) +
+                     (polar_msg.header.stamp.nanosec - sonar_info.header.stamp.nanosec) * 1e-9)
             self.get_logger().info(
-                '%s: imgmsg_to_cv2=%.1fms  apply_mapping=%.1fms  draw_grid=%.1fms  publish=%.1fms  total=%.1fms' % (
-                self.name, (t1-t0)*1000, (t2-t1)*1000, (t3-t2)*1000, (t4-t3)*1000, (t4-t0)*1000))
+                '%s: imgmsg_to_cv2=%.1fms  apply_mapping=%.1fms  draw_grid=%.1fms  publish=%.1fms  total=%.1fms  stamp_delta=%.1fms' % (
+                self.name, (t1-t0)*1000, (t2-t1)*1000, (t3-t2)*1000, (t4-t3)*1000, (t4-t0)*1000, dt*1000))
 
         except CvBridgeError as e:
             self.get_logger().warn('%s: CvBridge error: %s' % (self.name, e))
