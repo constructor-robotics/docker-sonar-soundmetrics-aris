@@ -17,3 +17,6 @@
     sample_period: 9
     cartesian_width: 350
     sound_velocity: 1500.0
+    enable_cartesian: true
+    enable_scaling: false
+    scale_factor: 0.5

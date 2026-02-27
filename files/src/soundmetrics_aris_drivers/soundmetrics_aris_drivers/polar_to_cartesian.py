@@ -45,6 +45,12 @@ class PolarToCartesianConverter(Node):
         # CvBridge for image conversion
         self.bridge = CvBridge()
 
+        # Scaling parameters
+        self.declare_parameter('enable_scaling', False)
+        self.declare_parameter('scale_factor', 0.5)
+        self.enable_scaling = self.get_parameter('enable_scaling').value
+        self.scale_factor = self.get_parameter('scale_factor').value
+
         # Mapping cache
         self.cached_params = None
         self.range_bin_map = None
@@ -296,6 +302,13 @@ class PolarToCartesianConverter(Node):
             # Draw grid overlay
             cartesian_mono = self.draw_grid_overlay(cartesian_cv)
             t3 = time.perf_counter()
+
+            # Apply scaling if enabled
+            if self.enable_scaling:
+                new_w = max(1, int(cartesian_mono.shape[1] * self.scale_factor))
+                new_h = max(1, int(cartesian_mono.shape[0] * self.scale_factor))
+                cartesian_mono = cv2.resize(cartesian_mono, (new_w, new_h),
+                                            interpolation=cv2.INTER_LINEAR)
 
             # Publish with same header (timestamp + frame_id)
             cart_msg = self.bridge.cv2_to_imgmsg(cartesian_mono, encoding='mono8')

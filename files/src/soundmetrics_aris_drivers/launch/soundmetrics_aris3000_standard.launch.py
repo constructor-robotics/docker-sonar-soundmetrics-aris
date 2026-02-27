@@ -1,10 +1,11 @@
 import os
+import yaml
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, GroupAction
 from launch.conditions import IfCondition
-from launch.substitutions import LaunchConfiguration, PythonExpression
+from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node, PushRosNamespace
 
 
@@ -17,13 +18,19 @@ def generate_launch_description():
         description='Namespace for the sonar nodes'
     )
 
+    yaml_path = os.path.join(pkg_share, 'config', 'soundmetrics_aris3000__standard.yaml')
+
+    with open(yaml_path, 'r') as f:
+        yaml_params = yaml.safe_load(f)
+    enable_cartesian = str(
+        yaml_params.get('/**', {}).get('ros__parameters', {}).get('enable_cartesian', True)
+    ).lower()
+
     enable_cartesian_arg = DeclareLaunchArgument(
         'enable_cartesian',
-        default_value='true',
-        description='Enable the polar-to-cartesian converter node'
+        default_value=enable_cartesian,
+        description='Enable the polar-to-cartesian converter node (default from YAML)'
     )
-
-    yaml_path = os.path.join(pkg_share, 'config', 'soundmetrics_aris3000__standard.yaml')
 
     sonar_node = Node(
         package='soundmetrics_aris_drivers',
@@ -40,6 +47,7 @@ def generate_launch_description():
         name='polar_to_cartesian',
         output='screen',
         condition=IfCondition(LaunchConfiguration('enable_cartesian')),
+        parameters=[yaml_path],
     )
 
     grouped = GroupAction([
