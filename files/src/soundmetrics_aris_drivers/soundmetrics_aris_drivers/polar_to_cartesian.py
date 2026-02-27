@@ -59,6 +59,11 @@ class PolarToCartesianConverter(Node):
         self.cached_grid_overlay = None
         self.cached_grid_mask = None
 
+        # Diagnostic counters
+        self._polar_recv = 0
+        self._info_recv = 0
+        self._sync_recv = 0
+
         # Subscribers using message_filters for time synchronization
         polar_sub = message_filters.Subscriber(
             self,
@@ -70,6 +75,8 @@ class PolarToCartesianConverter(Node):
             SonarInfo,
             'sonar_info'
         )
+        polar_sub.registerCallback(lambda msg: self._count('polar'))
+        info_sub.registerCallback(lambda msg: self._count('info'))
 
         ts = message_filters.ApproximateTimeSynchronizer(
             [polar_sub, info_sub],
@@ -77,6 +84,8 @@ class PolarToCartesianConverter(Node):
             slop=0.4
         )
         ts.registerCallback(self.sync_callback)
+
+        self.create_timer(5.0, self._log_counts)
 
         # Keep references to prevent garbage collection
         self._polar_sub = polar_sub
@@ -248,8 +257,23 @@ class PolarToCartesianConverter(Node):
         bgr[self.cached_grid_mask] = self.cached_grid_overlay[self.cached_grid_mask]
         return bgr
 
+    def _count(self, topic):
+        if topic == 'polar':
+            self._polar_recv += 1
+        elif topic == 'info':
+            self._info_recv += 1
+
+    def _log_counts(self):
+        self.get_logger().info(
+            '%s: [last 5s] polar_recv=%d  info_recv=%d  sync_fired=%d' % (
+            self.name, self._polar_recv, self._info_recv, self._sync_recv))
+        self._polar_recv = 0
+        self._info_recv = 0
+        self._sync_recv = 0
+
     def sync_callback(self, polar_msg, sonar_info):
         """Handle synchronized polar image and sonar info messages."""
+        self._sync_recv += 1
         try:
             t0 = time.perf_counter()
             polar_cv = self.bridge.imgmsg_to_cv2(polar_msg, desired_encoding='mono8')
