@@ -15,6 +15,7 @@ RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -q -y --no-
 	git \
 	iputils-ping \
 	net-tools \
+    ros-${ROSVERSION}-rmw-cyclonedds-cpp \
     && rm -rf /var/lib/apt/lists/*
 
 # Upgrade everything
