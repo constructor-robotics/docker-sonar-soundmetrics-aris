@@ -30,7 +30,7 @@ import numpy as np
 import math
 import time
 import message_filters
-from sensor_msgs.msg import Image
+from sensor_msgs.msg import Image, CompressedImage
 from soundmetrics_aris_interfaces.msg import SonarInfo
 from cv_bridge import CvBridge, CvBridgeError
 
@@ -50,6 +50,11 @@ class PolarToCartesianConverter(Node):
         self.declare_parameter('scale_factor', 0.5)
         self.enable_scaling = self.get_parameter('enable_scaling').value
         self.scale_factor = self.get_parameter('scale_factor').value
+
+        self.declare_parameter('compressed_format', 'png')
+        self.declare_parameter('compressed_quality', 80)
+        self.compressed_format = self.get_parameter('compressed_format').value
+        self.compressed_quality = self.get_parameter('compressed_quality').value
 
         # Mapping cache
         self.cached_params = None
@@ -102,6 +107,11 @@ class PolarToCartesianConverter(Node):
         self.cartesian_pub = self.create_publisher(
             Image,
             'image/cartesian_fan/raw',
+            1
+        )
+        self.cartesian_compressed_pub = self.create_publisher(
+            CompressedImage,
+            'image/cartesian_fan/compressed',
             1
         )
 
@@ -268,7 +278,7 @@ class PolarToCartesianConverter(Node):
             self._info_recv += 1
 
     def _log_counts(self):
-        self.get_logger().info(
+        self.get_logger().debug(
             '%s: [last 5s] polar_recv=%d  info_recv=%d  sync_fired=%d' % (
             self.name, self._polar_recv, self._info_recv, self._sync_recv))
         self._polar_recv = 0
@@ -314,11 +324,19 @@ class PolarToCartesianConverter(Node):
             cart_msg = self.bridge.cv2_to_imgmsg(cartesian_mono, encoding='mono8')
             cart_msg.header = polar_msg.header
             self.cartesian_pub.publish(cart_msg)
+            encode_ext = '.jpg' if self.compressed_format == 'jpeg' else '.png'
+            encode_params = [cv2.IMWRITE_JPEG_QUALITY, self.compressed_quality] if self.compressed_format == 'jpeg' else []
+            _, buf = cv2.imencode(encode_ext, cartesian_mono, encode_params)
+            comp_msg = CompressedImage()
+            comp_msg.header = polar_msg.header
+            comp_msg.format = self.compressed_format
+            comp_msg.data = buf.tobytes()
+            self.cartesian_compressed_pub.publish(comp_msg)
             t4 = time.perf_counter()
 
             dt = abs((polar_msg.header.stamp.sec - sonar_info.header.stamp.sec) +
                      (polar_msg.header.stamp.nanosec - sonar_info.header.stamp.nanosec) * 1e-9)
-            self.get_logger().info(
+            self.get_logger().debug(
                 '%s: imgmsg_to_cv2=%.1fms  apply_mapping=%.1fms  draw_grid=%.1fms  publish=%.1fms  total=%.1fms  stamp_delta=%.1fms' % (
                 self.name, (t1-t0)*1000, (t2-t1)*1000, (t3-t2)*1000, (t4-t3)*1000, (t4-t0)*1000, dt*1000))
 

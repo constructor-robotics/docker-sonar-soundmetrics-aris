@@ -20,3 +20,5 @@
     enable_cartesian: true
     enable_scaling: false
     scale_factor: 0.5
+    compressed_format: png
+    compressed_quality: 80

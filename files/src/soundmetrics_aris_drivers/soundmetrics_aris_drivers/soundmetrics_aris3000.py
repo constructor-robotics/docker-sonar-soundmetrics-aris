@@ -26,7 +26,7 @@ SOFTWARE.
 import rclpy
 from rclpy.node import Node
 from cv_bridge import CvBridge, CvBridgeError
-from sensor_msgs.msg import Image
+from sensor_msgs.msg import Image, CompressedImage
 
 from soundmetrics_aris_interfaces.msg import SonarInfo
 from soundmetrics_aris_interfaces.srv import SetSonarParams
@@ -195,6 +195,7 @@ class SonarSoundMetricsAris3000(Node):
         # Create publishers
         # The image below is the polar fan image, where x-axis is the range bins (samples per beam) and y-axis is beam angle (index)
         self.polar_pub = self.create_publisher(Image, 'image/polar/raw', 2)
+        self.polar_compressed_pub = self.create_publisher(CompressedImage, 'image/polar/compressed', 2)
         self.sonar_info_pub = self.create_publisher(SonarInfo, 'sonar_info', 2)
 
         ## Create Service -- to be tested
@@ -279,6 +280,11 @@ class SonarSoundMetricsAris3000(Node):
         self.sound_velocity = self.get_parameter('sound_velocity').value
         self.host_ip = self.get_parameter('host_ip').value
         self.sonar_ip = self.get_parameter('sonar_ip').value
+
+        self.declare_parameter('compressed_format', 'png')
+        self.declare_parameter('compressed_quality', 80)
+        self.compressed_format = self.get_parameter('compressed_format').value
+        self.compressed_quality = self.get_parameter('compressed_quality').value
 
         [self.mode, self.beams, self.pings, success] = self.get_beams_and_pings(self.ping_mode)
         # Repack the float values as an unsigned 32-bit integer representing a binary value
@@ -476,6 +482,14 @@ class SonarSoundMetricsAris3000(Node):
             polar_img_msg.header.stamp = self.get_clock().now().to_msg()
             polar_img_msg.header.frame_id = self.frame_id
             self.polar_pub.publish(polar_img_msg)
+            encode_ext = '.jpg' if self.compressed_format == 'jpeg' else '.png'
+            encode_params = [cv2.IMWRITE_JPEG_QUALITY, self.compressed_quality] if self.compressed_format == 'jpeg' else []
+            _, buf = cv2.imencode(encode_ext, ordered_image, encode_params)
+            comp_msg = CompressedImage()
+            comp_msg.header = polar_img_msg.header
+            comp_msg.format = self.compressed_format
+            comp_msg.data = buf.tobytes()
+            self.polar_compressed_pub.publish(comp_msg)
         except CvBridgeError as e:
             self.get_logger().warn('CvBridgeError: %s' % e)
 
