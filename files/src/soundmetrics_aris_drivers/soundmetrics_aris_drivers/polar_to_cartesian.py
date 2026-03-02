@@ -111,7 +111,7 @@ class PolarToCartesianConverter(Node):
         )
         self.cartesian_compressed_pub = self.create_publisher(
             CompressedImage,
-            'image/cartesian_fan/compressed',
+            'image/cartesian_fan/raw/compressed',
             1
         )
 

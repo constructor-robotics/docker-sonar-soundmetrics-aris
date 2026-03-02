@@ -195,7 +195,7 @@ class SonarSoundMetricsAris3000(Node):
         # Create publishers
         # The image below is the polar fan image, where x-axis is the range bins (samples per beam) and y-axis is beam angle (index)
         self.polar_pub = self.create_publisher(Image, 'image/polar/raw', 2)
-        self.polar_compressed_pub = self.create_publisher(CompressedImage, 'image/polar/compressed', 2)
+        self.polar_compressed_pub = self.create_publisher(CompressedImage, 'image/polar/raw/compressed', 2)
         self.sonar_info_pub = self.create_publisher(SonarInfo, 'sonar_info', 2)
 
         ## Create Service -- to be tested
