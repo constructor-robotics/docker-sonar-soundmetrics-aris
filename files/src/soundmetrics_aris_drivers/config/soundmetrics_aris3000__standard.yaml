@@ -2,7 +2,7 @@
   ros__parameters:
     use_64_bit_os: true
     local_network_interface_name: "enp4s0"
-    frame_id: "aris3000"
+    frame_id: "aris3000_optical_frame"
     host_ip: "169.254.7.10"
     sonar_ip: "169.254.7.147"
     frame_period_sec: 0.2
