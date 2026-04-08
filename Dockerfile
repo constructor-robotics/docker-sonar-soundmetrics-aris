@@ -15,6 +15,7 @@ RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -q -y --no-
 	git \
 	iputils-ping \
 	net-tools \
+    supervisor \
     ros-${ROSVERSION}-rmw-cyclonedds-cpp \
     ros-${ROSVERSION}-rmw-zenoh-cpp \
     && rm -rf /var/lib/apt/lists/*
@@ -32,5 +33,7 @@ RUN echo "source /opt/ros/${ROSVERSION}/setup.bash" >> /root/.bashrc && \
 
 # Entrypoint runs colcon build on container startup
 COPY entrypoint.sh /entrypoint.sh
+COPY supervisord.conf /etc/supervisor/supervisord.conf
+RUN mkdir -p /var/log/supervisor
 ENTRYPOINT ["/entrypoint.sh"]
-CMD ["/bin/bash"]
+CMD ["/usr/bin/supervisord", "-c", "/etc/supervisor/supervisord.conf"]
