@@ -31,6 +31,15 @@ RUN mkdir -p /home/${WORKSPACE}/src
 RUN echo "source /opt/ros/${ROSVERSION}/setup.bash" >> /root/.bashrc && \
     echo "if [ -f /home/${WORKSPACE}/install/setup.bash ]; then source /home/${WORKSPACE}/install/setup.bash; fi" >> /root/.bashrc
 
+# Convenience wrapper: `arisparam <subcommand> [args...]` proxies to
+# `ros2 param <subcommand> /soundmetrics_aris3000/soundmetrics_aris3000 [args...]`
+# Examples:
+#   arisparam list
+#   arisparam get  gain
+#   arisparam set  gain 18
+#   arisparam dump > preset.yaml
+RUN echo 'arisparam() { ros2 param "$1" /soundmetrics_aris3000/soundmetrics_aris3000 "${@:2}"; }' >> /root/.bashrc
+
 # Entrypoint runs colcon build on container startup
 COPY entrypoint.sh /entrypoint.sh
 COPY supervisord.conf /etc/supervisor/supervisord.conf

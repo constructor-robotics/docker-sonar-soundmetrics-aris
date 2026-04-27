@@ -25,6 +25,7 @@ SOFTWARE.
 
 import rclpy
 from rclpy.node import Node
+from rclpy.qos import qos_profile_sensor_data
 import cv2
 import numpy as np
 import math
@@ -75,16 +76,21 @@ class PolarToCartesianConverter(Node):
         self._info_recv = 0
         self._sync_recv = 0
 
-        # Subscribers using message_filters for time synchronization
+        # Subscribers using message_filters for time synchronization.
+        # qos_profile MUST match the publishers in soundmetrics_aris3000.py
+        # (sensor_data: BEST_EFFORT). Without this, ROS rejects the connection
+        # as QoS-incompatible and no frames flow through.
         polar_sub = message_filters.Subscriber(
             self,
             Image,
-            'image/polar/raw'
+            'image/polar/raw',
+            qos_profile=qos_profile_sensor_data
         )
         info_sub = message_filters.Subscriber(
             self,
             SonarInfo,
-            'sonar_info'
+            'sonar_info',
+            qos_profile=qos_profile_sensor_data
         )
         polar_sub.registerCallback(lambda msg: self._count('polar'))
         info_sub.registerCallback(lambda msg: self._count('info'))

@@ -25,6 +25,8 @@ SOFTWARE.
 
 import rclpy
 from rclpy.node import Node
+from rclpy.qos import qos_profile_sensor_data
+from rcl_interfaces.msg import SetParametersResult
 from cv_bridge import CvBridge, CvBridgeError
 from sensor_msgs.msg import Image, CompressedImage
 
@@ -191,14 +193,25 @@ class SonarSoundMetricsAris3000(Node):
         ### Create ROS Publishers and Services
         # Create publishers
         # The image below is the polar fan image, where x-axis is the range bins (samples per beam) and y-axis is beam angle (index)
-        self.polar_pub = self.create_publisher(Image, 'image/polar/raw', 2)
-        self.polar_compressed_pub = self.create_publisher(CompressedImage, 'image/polar/raw/compressed', 2)
-        self.sonar_info_pub = self.create_publisher(SonarInfo, 'sonar_info', 2)
+        # Sensor-stream QoS: BEST_EFFORT + depth-5 keep-last + volatile.
+        # Rationale: at 5 Hz with ~115 KB frames, retrying a dropped sample is
+        # pointless because a fresher one is already in flight. Subscribers
+        # (incl. polar_to_cartesian.py) must use the same profile or ROS will
+        # refuse the connection with a QoS-incompatibility warning.
+        self.polar_pub = self.create_publisher(Image, 'image/polar/raw', qos_profile_sensor_data)
+        self.polar_compressed_pub = self.create_publisher(CompressedImage, 'image/polar/raw/compressed', qos_profile_sensor_data)
+        self.sonar_info_pub = self.create_publisher(SonarInfo, 'sonar_info', qos_profile_sensor_data)
 
         ## Create Service -- to be tested
         self.load_configuration_srv = self.create_service(SetSonarParams, 'configuration', self.set_configuration)
 
         self.bridge = CvBridge()
+
+        # Register the runtime parameter callback LAST so it doesn't fire
+        # for the YAML-loaded values during declare_parameter() in get_config().
+        # From now on, `ros2 param set ...` will validate and reconfigure live.
+        self.add_on_set_parameters_callback(self.on_set_parameters)
+
         self.get_logger().info('%s: Finish creating ROS Publishers and Services' % self.name)
 
 
@@ -334,6 +347,137 @@ class SonarSoundMetricsAris3000(Node):
         self.lock.release()
         response.attempted = True
         return response
+
+
+    # Parameter names that, when changed, require shipping a fresh config to the sonar.
+    _SONAR_RECONFIG_PARAMS = frozenset({
+        'frame_period_sec', 'gain', 'frequency', 'focus', 'pulse_width',
+        'window_start', 'window_length', 'samples_per_beam', 'ping_mode',
+        'sound_velocity',
+    })
+    # Parameter names that we update in-place but don't need to re-talk to the sonar for.
+    _LIVE_NO_RECONFIG_PARAMS = frozenset({
+        'frame_id', 'compressed_format', 'compressed_quality', 'cartesian_width',
+    })
+    # Parameter names that cannot be changed at runtime (would require a reconnect).
+    _LOCKED_AT_INIT_PARAMS = frozenset({
+        'host_ip', 'sonar_ip', 'local_network_interface_name',
+    })
+
+
+    def _validate_param(self, name, value):
+        """Return None if (name, value) is acceptable, else a human-readable reason string."""
+        if name == 'frame_period_sec':
+            if not (FRAME_PERIOD_SEC_MIN <= float(value) <= FRAME_PERIOD_SEC_MAX):
+                return f"frame_period_sec must be in [{FRAME_PERIOD_SEC_MIN}, {FRAME_PERIOD_SEC_MAX}] s"
+        elif name == 'gain':
+            if not (GAIN_MIN <= int(value) <= GAIN_MAX):
+                return f"gain must be in [{GAIN_MIN}, {GAIN_MAX}] dB"
+        elif name == 'frequency':
+            if int(value) not in (0, 1):
+                return "frequency must be 0 (low / 1.8 MHz) or 1 (high / 3.0 MHz)"
+        elif name == 'focus':
+            if not (FOCUS_MIN <= int(value) <= FOCUS_MAX):
+                return f"focus must be in [{FOCUS_MIN}, {FOCUS_MAX}]"
+        elif name == 'pulse_width':
+            if int(value) < 1:
+                return "pulse_width must be >= 1 us"
+        elif name == 'ping_mode':
+            if int(value) not in (1, 3, 6, 9):
+                return "ping_mode must be one of {1, 3, 6, 9}"
+        elif name == 'samples_per_beam':
+            if not (128 <= int(value) <= 4096):
+                return "samples_per_beam must be in [128, 4096]"
+        elif name == 'window_start':
+            if float(value) <= 0.0:
+                return "window_start must be > 0 m"
+        elif name == 'window_length':
+            if float(value) <= 0.0:
+                return "window_length must be > 0 m"
+        elif name == 'sound_velocity':
+            if not (1000.0 < float(value) < 2000.0):
+                return "sound_velocity must be in (1000, 2000) m/s"
+        elif name == 'compressed_format':
+            if str(value) not in ('png', 'jpeg'):
+                return "compressed_format must be 'png' or 'jpeg'"
+        elif name == 'compressed_quality':
+            if not (1 <= int(value) <= 100):
+                return "compressed_quality must be in [1, 100]"
+        return None
+
+
+    def on_set_parameters(self, params):
+        """Runtime parameter callback. Validates the whole batch first, then applies
+        atomically under self.lock with at most one send_config() at the end."""
+
+        # Phase 1: validate every proposed change before mutating any state.
+        for p in params:
+            if p.name in self._LOCKED_AT_INIT_PARAMS:
+                return SetParametersResult(
+                    successful=False,
+                    reason=f"'{p.name}' cannot be changed at runtime; restart the node to apply.")
+            if p.name in self._SONAR_RECONFIG_PARAMS or p.name in self._LIVE_NO_RECONFIG_PARAMS:
+                err = self._validate_param(p.name, p.value)
+                if err is not None:
+                    return SetParametersResult(successful=False, reason=err)
+            # Anything else (unknown / undeclared) we silently allow — ROS handles it.
+
+        # Phase 2: apply atomically. RLock means we wait for any in-flight
+        # read_sonar_image() / set_configuration() / PING to finish, and
+        # the eventual send_config() re-enters the lock harmlessly.
+        with self.lock:
+            needs_reconfigure = False
+            for p in params:
+                name, value = p.name, p.value
+                if name == 'frame_period_sec':
+                    self.frame_period_sec = float(value)
+                    needs_reconfigure = True
+                elif name == 'gain':
+                    self.gain = int(value)
+                    self.gain_binary = struct.unpack('I', struct.pack('f', float(value)))[0]
+                    needs_reconfigure = True
+                elif name == 'frequency':
+                    self.frequency = int(value)
+                    needs_reconfigure = True
+                elif name == 'focus':
+                    self.focus = int(value)
+                    needs_reconfigure = True
+                elif name == 'pulse_width':
+                    self.pulse_width = int(value)
+                    needs_reconfigure = True
+                elif name == 'window_start':
+                    self.window_start = float(value)
+                    needs_reconfigure = True
+                elif name == 'window_length':
+                    self.window_length = float(value)
+                    needs_reconfigure = True
+                elif name == 'samples_per_beam':
+                    self.samples_per_beam = int(value)
+                    needs_reconfigure = True
+                elif name == 'sound_velocity':
+                    self.sound_velocity = float(value)
+                    needs_reconfigure = True
+                elif name == 'ping_mode':
+                    [m, b, pi, _ok] = self.get_beams_and_pings(int(value))
+                    # _ok is guaranteed True because Phase 1 already validated.
+                    self.ping_mode = m
+                    self.mode = m
+                    self.beams = b
+                    self.pings = pi
+                    needs_reconfigure = True
+                elif name == 'frame_id':
+                    self.frame_id = str(value)
+                elif name == 'compressed_format':
+                    self.compressed_format = str(value)
+                elif name == 'compressed_quality':
+                    self.compressed_quality = int(value)
+                elif name == 'cartesian_width':
+                    self.ixsize = int(value)
+
+            if needs_reconfigure:
+                self.send_config()
+
+        return SetParametersResult(successful=True)
 
 
     def send_config(self):

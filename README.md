@@ -37,6 +37,7 @@ A Dockerized ROS 2 (Jazzy) driver for the **Sound Metrics ARIS Explorer 3000** f
    - [Verifying the Connection](#verifying-the-connection)
 10. [Configuration Reference](#configuration-reference)
 11. [Troubleshooting](#troubleshooting)
+12. [Recent Changes](#recent-changes)
 
 ---
 
@@ -346,7 +347,6 @@ All topics are under the namespace `/<ns>/` (default: `/soundmetrics_aris3000/`)
 
 | Parameter | Type | Default | Description |
 |---|---|---|---|
-| `use_64_bit_os` | bool | `true` | Adds 4-byte offset when parsing the frame header (required on 64-bit systems) |
 | `local_network_interface_name` | string | `"enp4s0"` | Host NIC name connected to the sonar |
 | `frame_id` | string | `"aris_sonar_optical_frame"` | TF frame ID for published messages |
 | `host_ip` | string | `"169.254.7.10"` | IP address of the host NIC on the sonar subnet |
@@ -641,6 +641,110 @@ ros2 launch soundmetrics_aris_drivers soundmetrics_aris3000_standard.launch.py \
 - Reduce `window_length`
 - Set `compressed_format: jpeg` to reduce publish overhead
 - Disable the cartesian node if not needed
+
+---
+
+## Recent Changes
+
+This section documents the bug fixes, behavior changes, and ergonomic
+improvements applied to the driver after its initial release. Items are
+grouped by category. Anything labeled **Action required** has a user-visible
+impact you should be aware of when upgrading.
+
+### Bug Fixes
+
+- **`read_sonar_image()` no longer leaks the RLock on exceptions.** The body
+  is wrapped in `with self.lock:` so the lock is always released, even if a
+  packet-decode or `cv_bridge` call raises. Fixes a class of failures where
+  the PING thread and parameter callback would deadlock after a single bad
+  frame.
+- **`read_sonar_image()` no longer crashes after a `CvBridgeError`.** The
+  post-`except` code used to dereference `polar_img_msg.header.stamp` even
+  when `cv2_to_imgmsg` had failed before the assignment. The image and
+  `SonarInfo` now share a single timestamp captured before encoding, and
+  `SonarInfo` is published only when its bundle was actually parsed.
+- **PING keep-alive thread no longer races with reconfiguration.**
+  `send_ping()` now takes `self.lock` around the command burst, preventing
+  PINGs from interleaving the two-packet duplicate of an in-flight
+  `send_config()` and from corrupting the shared transaction counter.
+- **PING thread shuts down cleanly.** `send_ping()` catches `OSError` /
+  `AttributeError` raised when the TCP socket is closed during shutdown
+  and exits the daemon thread without spraying a traceback.
+- **Invalid `ping_mode` is now rejected at startup.** Previously a value
+  outside `{1, 3, 6, 9}` was silently rewritten to `9` for the internal
+  `(beams, pings)` tuple, but the user's invalid value was still shipped to
+  the sonar inside `P2_SET_SONAR_PARAMS`, causing a re-sync loop. The
+  driver now logs an error, realigns `self.ping_mode` to the fallback, and
+  proceeds with a consistent state.
+- **`SonarInfo.index` now reports the real frame counter.** The native
+  `struct.unpack` layout requires a 4-byte alignment prefix to read the
+  packed firmware header correctly, but as a side effect the first uint32
+  parsed was always those prefix zeros. The frame index is now read
+  directly from the firmware buffer with `struct.unpack_from('<I', ...)`,
+  bypassing the prefix. All other `SonarInfo` fields are unchanged.
+
+### New: Runtime Reconfiguration
+
+- **`SetSonarParams` service is enabled.** The previously-commented
+  `create_service(...)` call in `__init__` is active. Use it for atomic
+  multi-parameter updates that should land on the sonar in one burst.
+- **`add_on_set_parameters_callback` registered.** All sonar-affecting
+  parameters can now be changed live via `ros2 param set`, the
+  `rqt_reconfigure` GUI, or any rclpy parameter client. The callback
+  validates the entire batch before applying, then issues at most one
+  `send_config()` per call. Network parameters (`host_ip`, `sonar_ip`,
+  `local_network_interface_name`) are explicitly rejected at runtime since
+  they would require a socket reconnect.
+- **Parameter validation is centralized.** Out-of-range values
+  (e.g. `gain > 24`, `ping_mode = 2`) are rejected with a human-readable
+  reason instead of being silently clamped or sent to the sonar.
+
+### Behavior Changes (Action Required for Downstream Consumers)
+
+- **Image and `SonarInfo` topics now use `qos_profile_sensor_data`**
+  (`BEST_EFFORT`, depth 5, volatile) instead of the default `RELIABLE`
+  profile. This matches the ROS 2 convention for high-rate sensor streams
+  and prevents subscribers from blocking on retries that would never help.
+  - **Action required for external subscribers:** any node subscribing to
+    `image/polar/raw`, `image/polar/raw/compressed`, or `sonar_info` must
+    use a compatible profile. The bundled `polar_to_cartesian` node has
+    been updated; external consumers must do the same. The CLI tooling
+    consequence: `ros2 topic echo <topic>` now requires
+    `--qos-reliability best_effort` to receive data; `ros2 topic hz` and
+    `rqt_image_view` auto-detect and continue to work.
+- **`use_64_bit_os` parameter removed.** The flag was misleadingly named
+  (it had nothing to do with the host OS) and its `false` branch was
+  broken code. The 4-byte alignment prefix it controlled is now applied
+  unconditionally inside `read_frame_header()`.
+  - **Action required:** delete `use_64_bit_os: true` from any custom
+    YAML configs, otherwise ROS will warn about an undeclared parameter
+    at startup.
+
+### Developer Convenience
+
+- **`arisparam` shell wrapper** baked into the Dockerfile. Inside any
+  container shell:
+  ```bash
+  arisparam list
+  arisparam get  gain
+  arisparam set  gain 18
+  arisparam dump > preset.yaml
+  ```
+  This proxies to `ros2 param <subcommand>
+  /soundmetrics_aris3000/soundmetrics_aris3000 ...` so you don't have to
+  type the namespaced node path every time. Requires a `docker compose
+  build` after pulling these changes.
+
+### Internal Cleanup (No User Impact)
+
+- Commented out unused instance variables (`PREDEFINED_ALTITUDE`,
+  `offset_fls_to_dvl`, `pitch_vehicle`, `compass_pitch`, `altitude`)
+  with `DEAD/UNUSED` markers explaining the reason. Kept rather than
+  deleted so future readers can tell they are intentional vestiges.
+- Removed the dead `sample_period: 3.0` entry from
+  `soundmetrics_aris3000__standard.yaml`. The driver derives `sample_period`
+  from `window_length`, `samples_per_beam`, and `sound_velocity`, and
+  never read this YAML key.
 
 ---
 
