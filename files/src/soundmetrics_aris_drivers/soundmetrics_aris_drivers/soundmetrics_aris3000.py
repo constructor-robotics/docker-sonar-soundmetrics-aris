@@ -114,15 +114,12 @@ class SonarSoundMetricsAris3000(Node):
         self.name = self.get_name()
         self.local_network_interface_name = ""
 
-        #debug images
-        self.use_64_bit_os = True
-
         self.nt = 0
         self.need_sync = True
         self.lock = threading.RLock()
 
         # predefined parameters
-        self.PREDEFINED_ALTITUDE = 1.2
+        # self.PREDEFINED_ALTITUDE = 1.2  # DEAD/UNUSED — leftover from another project
         self.frame_period_sec = 1.0
         self.gain_binary = 1103101952
         self.gain = 24
@@ -135,7 +132,7 @@ class SonarSoundMetricsAris3000(Node):
         self.window_length = 3.5
         self.ixsize = 350
         self.sound_velocity = 1500.0
-        self.offset_fls_to_dvl = 0.25
+        # self.offset_fls_to_dvl = 0.25  # DEAD/UNUSED — FLS-to-DVL offset, not relevant here
         self.host_ip = "169.254.7.10"
         self.sonar_ip = "169.254.7.147"
 
@@ -144,10 +141,10 @@ class SonarSoundMetricsAris3000(Node):
         self.pings = 0
         self.bundle_size = 0
         self.iysize = 0
-        self.pitch_vehicle = 0.0
-        self.compass_pitch = 0.0
+        # self.pitch_vehicle = 0.0  # DEAD/UNUSED — never read
+        # self.compass_pitch = 0.0  # DEAD/UNUSED — only written, never read (see read_frame_header)
 
-        self.altitude = 1.0
+        # self.altitude = 1.0  # DEAD/UNUSED — never read
 
         # Load ROS PARAM SERVER parameters
         self.get_config()
@@ -199,7 +196,7 @@ class SonarSoundMetricsAris3000(Node):
         self.sonar_info_pub = self.create_publisher(SonarInfo, 'sonar_info', 2)
 
         ## Create Service -- to be tested
-        #self.load_configuration_srv = self.create_service(SetSonarParams, 'configuration', self.set_configuration)
+        self.load_configuration_srv = self.create_service(SetSonarParams, 'configuration', self.set_configuration)
 
         self.bridge = CvBridge()
         self.get_logger().info('%s: Finish creating ROS Publishers and Services' % self.name)
@@ -247,7 +244,6 @@ class SonarSoundMetricsAris3000(Node):
     def get_config(self):
         """ Read configurations from ROS PARAM SERVER """
 
-        self.declare_parameter('use_64_bit_os', True)
         self.declare_parameter('local_network_interface_name', "")
         self.declare_parameter('frame_id', "aris3000")
         self.declare_parameter('frame_period_sec', 1.0)
@@ -264,7 +260,6 @@ class SonarSoundMetricsAris3000(Node):
         self.declare_parameter('host_ip', "169.254.7.10")
         self.declare_parameter('sonar_ip', "169.254.7.147")
 
-        self.use_64_bit_os = self.get_parameter('use_64_bit_os').value
         self.local_network_interface_name = self.get_parameter('local_network_interface_name').value
         self.frame_id = self.get_parameter('frame_id').value
         self.frame_period_sec = self.get_parameter('frame_period_sec').value
@@ -287,15 +282,31 @@ class SonarSoundMetricsAris3000(Node):
         self.compressed_quality = self.get_parameter('compressed_quality').value
 
         [self.mode, self.beams, self.pings, success] = self.get_beams_and_pings(self.ping_mode)
+        if not success:
+            self.get_logger().error(
+                "Invalid ping_mode=%d; valid values are 1, 3, 6, 9. "
+                "Falling back to ping_mode=%d (%d beams, %d pings)." %
+                (self.ping_mode, self.mode, self.beams, self.pings))
+            # Align the value sent to the sonar with the fallback we just chose,
+            # otherwise P2_SET_SONAR_PARAMS ships the invalid mode and the
+            # first frame triggers another re-sync.
+            self.ping_mode = self.mode
+
         # Repack the float values as an unsigned 32-bit integer representing a binary value
         self.gain_binary = struct.unpack('I', struct.pack('f', self.gain))[0]
 
     def send_ping(self):
         """ Send a ping command to keep sensor connection alive """
         while rclpy.ok():
-            # Send ping
-            cmd = self.create_command(PING, [0, 0, 0, 0, 0, 0])
-            self.send_command(cmd)
+            # Serialize with send_config/set_configuration so the two-packet
+            # command duplicate and the self.nt counter don't interleave.
+            with self.lock:
+                try:
+                    cmd = self.create_command(PING, [0, 0, 0, 0, 0, 0])
+                    self.send_command(cmd)
+                except (OSError, AttributeError):
+                    # Socket closed during shutdown, or tcp attribute gone
+                    return
             time.sleep(PING_INTERVAL_SEC)
 
 
@@ -361,7 +372,7 @@ class SonarSoundMetricsAris3000(Node):
         # Set sonar frame rate
         # NOTE: Although this value was already set, it needs to be sent again to ensure the sonar is configured correctly (Reverse engineered)
         cmd = self.create_command(P2_SET_TARGET_FRAME_PERIOD_USEC,
-                                 [self.frame_period_sec*1e6, 0, 0, 0, 0, 0])
+                                 [int(self.frame_period_sec*1e6), 0, 0, 0, 0, 0])
         self.send_command(cmd)
 
         # Compute and set sonar parameters
@@ -435,68 +446,69 @@ class SonarSoundMetricsAris3000(Node):
 
     def read_sonar_image(self):
         """ Read ARIS3000 acoustic images """
-        self.lock.acquire()
+        with self.lock:
+            if self.need_sync:
+                self.get_logger().info('%s: Wait image sync' % self.name)
+                self.udp_data.settimeout(5.0)
+                # Sync with first bundle
+                while self.need_sync:
+                    try:
+                        header = self.udp_data.recv(68)
+                    except socket.timeout:
+                        self.get_logger().warn('%s: No UDP data received on port %d within 5s, retrying...' % (self.name, UDP_DATA_PORT))
+                        continue
+                    header_fmt = list(struct.unpack('< 17I', header))
+                    self.get_logger().debug('%s: Sync packet - body_size=%d, packet_num=%d, total_packets=%d' %
+                                   (self.name, header_fmt[5], header_fmt[11], header_fmt[12]))
 
-        if self.need_sync:
-            self.get_logger().info('%s: Wait image sync' % self.name)
-            self.udp_data.settimeout(5.0)
-            # Sync with first bundle
-            while self.need_sync:
-                try:
-                    header = self.udp_data.recv(68)
-                except socket.timeout:
-                    self.get_logger().warn('%s: No UDP data received on port %d within 5s, retrying...' % (self.name, UDP_DATA_PORT))
-                    continue
-                header_fmt = list(struct.unpack('< 17I', header))
-                self.get_logger().debug('%s: Sync packet - body_size=%d, packet_num=%d, total_packets=%d' %
-                               (self.name, header_fmt[5], header_fmt[11], header_fmt[12]))
+                    # check if there is data in the body and the number of
+                    # transaction is the last one of the frame
+                    if header_fmt[5] > 0 and header_fmt[12]-1 == header_fmt[11]:
+                        self.bundle_size = header_fmt[12]
+                        self.get_logger().info('%s: Synced - bundle_size=%d' % (self.name, self.bundle_size))
+                        self.need_sync = False
+                        self.udp_data.settimeout(None)
+                        self.get_logger().info('%s: Reading data' % self.name)
 
-                # check if there is data in the body and the number of
-                # transaction is the last one of the frame
-                if header_fmt[5] > 0 and header_fmt[12]-1 == header_fmt[11]:
-                    self.bundle_size = header_fmt[12]
-                    self.get_logger().info('%s: Synced - bundle_size=%d' % (self.name, self.bundle_size))
-                    self.need_sync = False
-                    self.udp_data.settimeout(None)
-                    self.get_logger().info('%s: Reading data' % self.name)
+            # Read sonar image
+            # ARIS sample data is stored as "one unsigned byte per sample" with valid values 0-255
+            img = []
+            sonar_info = None
+            for i in range(self.bundle_size):
+                data = self.udp_data.recv(HEADER_SIZE_BYTES + PAYLOAD_SIZE_BYTES)
+                packet = struct.unpack('17I ' + str(len(data) - HEADER_SIZE_BYTES) + 'B', data)
+                if i == 0:
+                    frame_header = list(packet)[17:1041]
+                    sonar_info = self.read_frame_header(struct.pack('<%dB' % FRAME_HEADER_SIZE_BYTES, *frame_header))
+                    img = img + list(packet)[1041:]
+                else:
+                    img = img + list(packet)[17:]
 
-        # Read sonar image
-        # ARIS sample data is stored as "one unsigned byte per sample" with valid values 0-255
-        img = []
-        for i in range(self.bundle_size):
-            data = self.udp_data.recv(HEADER_SIZE_BYTES + PAYLOAD_SIZE_BYTES)
-            packet = struct.unpack('17I ' + str(len(data) - HEADER_SIZE_BYTES) + 'B', data)
-            if i == 0:
-                frame_header = list(packet)[17:1041]
-                sonar_info = self.read_frame_header(struct.pack('<%dB' % FRAME_HEADER_SIZE_BYTES, *frame_header))
-                img = img + list(packet)[1041:]
-            else:
-                img = img + list(packet)[17:]
+            # Reorder image and the data comes not in order due to multiplexing of the sensor
+            ordered_image = self.reorder_samples(img)
 
-        # Reorder image and the data comes not in order due to multiplexing of the sensor
-        ordered_image = self.reorder_samples(img)
+            # Single timestamp so Image and SonarInfo stay paired downstream
+            stamp = self.get_clock().now().to_msg()
 
-        try:
-            cv_ordered_image_bgr = cv2.cvtColor(ordered_image,  cv2.COLOR_GRAY2BGR)
-            polar_img_msg = self.bridge.cv2_to_imgmsg(ordered_image, "mono8")
-            polar_img_msg.header.stamp = self.get_clock().now().to_msg()
-            polar_img_msg.header.frame_id = self.frame_id
-            self.polar_pub.publish(polar_img_msg)
-            encode_ext = '.jpg' if self.compressed_format == 'jpeg' else '.png'
-            encode_params = [cv2.IMWRITE_JPEG_QUALITY, self.compressed_quality] if self.compressed_format == 'jpeg' else []
-            _, buf = cv2.imencode(encode_ext, ordered_image, encode_params)
-            comp_msg = CompressedImage()
-            comp_msg.header = polar_img_msg.header
-            comp_msg.format = self.compressed_format
-            comp_msg.data = buf.tobytes()
-            self.polar_compressed_pub.publish(comp_msg)
-        except CvBridgeError as e:
-            self.get_logger().warn('CvBridgeError: %s' % e)
+            try:
+                polar_img_msg = self.bridge.cv2_to_imgmsg(ordered_image, "mono8")
+                polar_img_msg.header.stamp = stamp
+                polar_img_msg.header.frame_id = self.frame_id
+                self.polar_pub.publish(polar_img_msg)
+                encode_ext = '.jpg' if self.compressed_format == 'jpeg' else '.png'
+                encode_params = [cv2.IMWRITE_JPEG_QUALITY, self.compressed_quality] if self.compressed_format == 'jpeg' else []
+                _, buf = cv2.imencode(encode_ext, ordered_image, encode_params)
+                comp_msg = CompressedImage()
+                comp_msg.header = polar_img_msg.header
+                comp_msg.format = self.compressed_format
+                comp_msg.data = buf.tobytes()
+                self.polar_compressed_pub.publish(comp_msg)
+            except CvBridgeError as e:
+                self.get_logger().warn('CvBridgeError: %s' % e)
 
-        sonar_info.header.stamp = polar_img_msg.header.stamp
-        self.sonar_info_pub.publish(sonar_info)
-
-        self.lock.release()
+            if sonar_info is not None:
+                sonar_info.header.stamp = stamp
+                self.sonar_info_pub.publish(sonar_info)
 
 
     def reorder_samples(self, frame_data):
@@ -541,20 +553,27 @@ class SonarSoundMetricsAris3000(Node):
         """ Parses ARIS 3000 header into sonar_info msg """
 
         frameheader_bytes = frameheader ### Python 3
-        # TODO: We have added 4 extra chars to work on 64bits machine!
 
-        offset_64_bit_os = ''
-        if self.use_64_bit_os:
-            offset_64_bit_os = b'\x00\x00\x00\x00'
-
-        frame_header_fields = struct.unpack('IQIIQIIIIIIffIiIIIIIIffffffffffffffffffffddfIfffIIIIfIfffffffffdfIIIfffIIIIIIIffffff16fffffIIIIIIffIIIIIIQIIIIIIf124I',
-                                            offset_64_bit_os + frameheader_bytes)
+        # The big format string below uses *native* struct alignment, which
+        # inserts a 4-byte pad between the leading uint32 and the first
+        # uint64 so the Q lands on an 8-byte boundary. The ARIS firmware
+        # sends packed little-endian bytes (no padding), so we prepend 4
+        # zero bytes to make the two layouts line up. Consequence:
+        # frame_header_fields[0] always reads those prepended zeros, NOT
+        # the sonar's frame index. We read the real index directly below.
+        alignment_prefix = b'\x00\x00\x00\x00'
+        frame_header_fields = struct.unpack(
+            'IQIIQIIIIIIffIiIIIIIIffffffffffffffffffffddfIfffIIIIfIfffffffffdfIIIfffIIIIIIIffffff16fffffIIIIIIffIIIIIIQIIIIIIf124I',
+            alignment_prefix + frameheader_bytes)
 
 
         sonar_info = SonarInfo()
         sonar_info.header.stamp = self.get_clock().now().to_msg()
         sonar_info.header.frame_id = self.frame_id
-        sonar_info.index = frame_header_fields[0]
+        # Read frame index directly from the first 4 bytes of the firmware
+        # header (packed little-endian uint32), bypassing the native-alignment
+        # quirk that leaves frame_header_fields[0] reading our pad bytes.
+        sonar_info.index = struct.unpack_from('<I', frameheader_bytes, 0)[0]
         sonar_info.time = frame_header_fields[1]
         # sonar_info.version = frame_header_fields[2]
         sonar_info.window_start = frame_header_fields[11]
@@ -563,7 +582,7 @@ class SonarSoundMetricsAris3000(Node):
         sonar_info.focus = frame_header_fields[19]
         sonar_info.compass_heading = frame_header_fields[38]
         sonar_info.compass_pitch = frame_header_fields[39]
-        self.compass_pitch = sonar_info.compass_pitch
+        # self.compass_pitch = sonar_info.compass_pitch  # DEAD/UNUSED — cached for no reader
         sonar_info.compass_roll = frame_header_fields[40]
         sonar_info.sample_rate = frame_header_fields[100]
         sonar_info.accel_x = frame_header_fields[101]

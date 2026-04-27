@@ -1,24 +1,22 @@
 /**:
   ros__parameters:
-    use_64_bit_os: true
-    local_network_interface_name: "enp4s0"
+    local_network_interface_name: "enp8s0"
     frame_id: "aris_sonar_optical_frame"
-    host_ip: "169.254.7.10"
-    sonar_ip: "169.254.7.147"
+    host_ip: "169.254.0.29"
+    sonar_ip: "169.254.162.45"
     frame_period_sec: 0.2
-    gain: 24
+    gain: 12
     frequency: 1
     focus: 364
     pulse_width: 8
     ping_mode: 9
-    samples_per_beam: 1024
+    samples_per_beam: 901
     window_start: 1.2
     window_length: 2.0
-    sample_period: 9
     cartesian_width: 350
-    sound_velocity: 1500.0
-    enable_cartesian: false
+    sound_velocity: 1480.0
+    enable_cartesian: true
     enable_scaling: true
-    scale_factor: 0.5
+    scale_factor: 1.0
     compressed_format: png
-    compressed_quality: 80
+    compressed_quality: 100
