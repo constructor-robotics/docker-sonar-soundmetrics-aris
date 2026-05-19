@@ -1,8 +1,8 @@
 /**:
   ros__parameters:
-    local_network_interface_name: "enp8s0"
+    local_network_interface_name: "enp129s0"
     frame_id: "aris_sonar_optical_frame"
-    host_ip: "169.254.0.29"
+    host_ip: "169.254.0.10"
     sonar_ip: "169.254.162.45"
     frame_period_sec: 0.2
     gain: 12
