@@ -123,15 +123,8 @@ class PolarToCartesianConverter(Node):
 
         self.get_logger().info('%s: Polar-to-Cartesian converter initialized' % self.name)
 
-    def needs_remapping(self, sonar_info):
-        """Check if the mapping needs to be recomputed."""
-        cache_key = (
-            sonar_info.window_start,
-            sonar_info.window_length,
-            sonar_info.samples_per_beam,
-            sonar_info.beams,
-            sonar_info.half_field_of_view
-        )
+    def needs_remapping(self, cache_key):
+        """Return True (and update the cache) if this geometry/size key is new."""
         if cache_key != self.cached_params:
             self.cached_params = cache_key
             return True
@@ -299,19 +292,37 @@ class PolarToCartesianConverter(Node):
             polar_cv = self.bridge.imgmsg_to_cv2(polar_msg, desired_encoding='mono8')
             t1 = time.perf_counter()
 
-            # Recompute mapping if sonar parameters changed
-            if self.needs_remapping(sonar_info):
-                self.get_logger().info('%s: Sonar parameters changed, recomputing mapping' % self.name)
-                rmin = sonar_info.window_start
-                rmax = sonar_info.window_start + sonar_info.window_length
-                self.compute_mapping(
-                    rmin, rmax,
-                    sonar_info.samples_per_beam,
-                    sonar_info.beams,
-                    sonar_info.half_field_of_view
-                )
+            # The polar IMAGE is the source of truth for sample/beam counts. Sizing the
+            # map from sonar_info instead (firmware header) let the map be built for a
+            # different shape than the image we actually received — e.g. during a sonar
+            # re-sync or a transient/garbage frame header. That produced either frozen
+            # frames (out-of-range index -> exception -> nothing published, with the bad
+            # key cached so it stayed frozen) or wrong-geometry noise. So: take the SIZE
+            # from the image, and only the fan GEOMETRY (range window + FOV) from
+            # sonar_info — after validating it.
+            if polar_cv.ndim != 2 or polar_cv.shape[0] < 2 or polar_cv.shape[1] < 2:
+                self.get_logger().warn('%s: skipping frame with bad polar shape %s'
+                                       % (self.name, str(polar_cv.shape)))
+                return
+            samples_per_beam, beams = int(polar_cv.shape[0]), int(polar_cv.shape[1])
 
-            # Apply mapping
+            rmin = float(sonar_info.window_start)
+            rmax = float(sonar_info.window_start) + float(sonar_info.window_length)
+            half_fov = float(sonar_info.half_field_of_view)
+            if not (rmax > rmin) or half_fov <= 0.0:
+                self.get_logger().warn(
+                    '%s: skipping frame with degenerate geometry '
+                    '(window_start=%.3f window_length=%.3f half_fov=%.3f)'
+                    % (self.name, sonar_info.window_start, sonar_info.window_length, half_fov))
+                return
+
+            # Recompute mapping only when geometry or image size actually changes.
+            cache_key = (rmin, rmax, samples_per_beam, beams, half_fov)
+            if self.needs_remapping(cache_key):
+                self.get_logger().info('%s: Sonar geometry/size changed, recomputing mapping' % self.name)
+                self.compute_mapping(rmin, rmax, samples_per_beam, beams, half_fov)
+
+            # Apply mapping (map is guaranteed to match polar_cv's shape now)
             cartesian_cv = self.apply_mapping(polar_cv)
             t2 = time.perf_counter()
 
